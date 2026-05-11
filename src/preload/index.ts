@@ -15,13 +15,21 @@ const echoApi: EchoApi = {
     cancelScan: (jobId) => ipcRenderer.invoke(IpcChannels.LibraryCancelScan, jobId),
     getTracks: (query) => ipcRenderer.invoke(IpcChannels.LibraryGetTracks, query),
     getAlbums: (query) => ipcRenderer.invoke(IpcChannels.LibraryGetAlbums, query),
+    getAlbumTracks: (albumId, query) => ipcRenderer.invoke(IpcChannels.LibraryGetAlbumTracks, albumId, query),
     getSummary: () => ipcRenderer.invoke(IpcChannels.LibraryGetSummary),
   },
   playback: {
     getStatus: () => ipcRenderer.invoke(IpcChannels.PlaybackGetStatus),
+    playLocalFile: (request) => ipcRenderer.invoke(IpcChannels.PlaybackPlayLocalFile, request),
+    play: () => ipcRenderer.invoke(IpcChannels.PlaybackPlay),
+    pause: () => ipcRenderer.invoke(IpcChannels.PlaybackPause),
+    stop: () => ipcRenderer.invoke(IpcChannels.PlaybackStop),
+    seek: (positionSeconds) => ipcRenderer.invoke(IpcChannels.PlaybackSeek, positionSeconds),
   },
   audio: {
     getStatus: () => ipcRenderer.invoke(IpcChannels.AudioGetStatus),
+    listDevices: () => ipcRenderer.invoke(IpcChannels.AudioListDevices),
+    setOutput: (settings) => ipcRenderer.invoke(IpcChannels.AudioSetOutput, settings),
   },
 };
 

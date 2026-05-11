@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import electron from 'electron';
 import { createDatabase } from '../database/createDatabase';
 import { AlbumService } from './AlbumService';
@@ -21,6 +21,7 @@ import type {
 type LibraryServiceDependencies = {
   scanner?: LibraryScanner;
   metadataService?: MetadataService;
+  coverCacheDir?: string;
 };
 
 export class LibraryService {
@@ -75,6 +76,10 @@ export class LibraryService {
     return this.store.getAlbums(query);
   }
 
+  getAlbumTracks(albumId: string, query?: Pick<LibraryPageQuery, 'page' | 'pageSize'>): LibraryPage<LibraryTrack> {
+    return this.store.getAlbumTracks(albumId, query);
+  }
+
   getSummary(): LibrarySummary {
     return this.store.getSummary();
   }
@@ -96,7 +101,10 @@ export const createLibraryService = (
   const store = new LibraryStore(database);
   const scanner = dependencies.scanner ?? new LibraryScanner();
   const metadataService = dependencies.metadataService ?? new MetadataService();
-  const coverService = new CoverService(database);
+  const coverService = new CoverService(
+    database,
+    dependencies.coverCacheDir ?? join(dirname(databasePath), 'cover-cache'),
+  );
   const albumService = new AlbumService();
   const scanJobQueue = new ScanJobQueue(store, scanner, metadataService, coverService, albumService);
 

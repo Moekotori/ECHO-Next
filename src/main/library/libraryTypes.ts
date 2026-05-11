@@ -31,6 +31,7 @@ export type FieldSource =
   | 'sidecar'
   | 'folder_structure'
   | 'network'
+  | 'technical'
   | 'filename_fallback'
   | 'unknown';
 
@@ -41,6 +42,9 @@ export type ParsedTrackMetadata = {
   artist: string;
   album: string;
   albumArtist: string;
+  trackNo: number | null;
+  discNo: number | null;
+  year: number | null;
   duration: number;
   codec: string | null;
   sampleRate: number | null;
@@ -76,8 +80,10 @@ export type ScanJobUpdate = Partial<
     | 'skippedFiles'
     | 'addedTracks'
     | 'updatedTracks'
+    | 'removedTracks'
     | 'errorCount'
     | 'errors'
+    | 'phase'
     | 'startedAt'
     | 'finishedAt'
   >
@@ -90,5 +96,6 @@ export type ScanResultCounts = {
   skippedFiles: number;
   addedTracks: number;
   updatedTracks: number;
+  removedTracks: number;
   errors: string[];
 };

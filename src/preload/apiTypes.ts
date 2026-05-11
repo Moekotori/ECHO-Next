@@ -1,4 +1,4 @@
-import type { AudioStatus } from '../shared/types/audio';
+import type { AudioDeviceInfo, AudioOutputSettings, AudioStatus } from '../shared/types/audio';
 import type {
   LibraryAlbum,
   LibraryFolder,
@@ -8,7 +8,7 @@ import type {
   LibrarySummary,
   LibraryTrack,
 } from '../shared/types/library';
-import type { PlaybackStatus } from '../shared/types/playback';
+import type { PlaybackStartRequest, PlaybackStatus } from '../shared/types/playback';
 
 export type EchoApi = {
   app: {
@@ -23,13 +23,24 @@ export type EchoApi = {
     cancelScan: (jobId: string) => Promise<LibraryScanStatus>;
     getTracks: (query?: LibraryPageQuery) => Promise<LibraryPage<LibraryTrack>>;
     getAlbums: (query?: LibraryPageQuery) => Promise<LibraryPage<LibraryAlbum>>;
+    getAlbumTracks: (
+      albumId: string,
+      query?: Pick<LibraryPageQuery, 'page' | 'pageSize'>,
+    ) => Promise<LibraryPage<LibraryTrack>>;
     getSummary: () => Promise<LibrarySummary>;
   };
   playback: {
     getStatus: () => Promise<PlaybackStatus>;
+    playLocalFile: (request: PlaybackStartRequest) => Promise<PlaybackStatus>;
+    play: () => Promise<PlaybackStatus>;
+    pause: () => Promise<PlaybackStatus>;
+    stop: () => Promise<PlaybackStatus>;
+    seek: (positionSeconds: number) => Promise<PlaybackStatus>;
   };
   audio: {
     getStatus: () => Promise<AudioStatus>;
+    listDevices: () => Promise<AudioDeviceInfo[]>;
+    setOutput: (settings: AudioOutputSettings) => Promise<AudioStatus>;
   };
 };
 

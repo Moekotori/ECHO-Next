@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { basename, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AlbumService } from './AlbumService';
 import type {
@@ -134,10 +135,10 @@ export class LibraryStore {
     this.database
       .prepare(
         `INSERT INTO scan_jobs (
-          id, folder_id, status, errors_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
+          id, folder_id, status, phase, errors_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, folderId, 'queued', '[]', timestamp, timestamp);
+      .run(id, folderId, 'queued', 'queued', '[]', timestamp, timestamp);
 
     const job = this.getScanJob(id);
 
@@ -165,11 +166,13 @@ export class LibraryStore {
       .prepare(
         `UPDATE scan_jobs SET
           status = ?,
+          phase = ?,
           total_files = ?,
           processed_files = ?,
           skipped_files = ?,
           added_tracks = ?,
           updated_tracks = ?,
+          removed_tracks = ?,
           error_count = ?,
           errors_json = ?,
           cancel_requested = COALESCE(?, cancel_requested),
@@ -180,11 +183,13 @@ export class LibraryStore {
       )
       .run(
         next.status,
+        next.phase,
         next.totalFiles,
         next.processedFiles,
         next.skippedFiles,
         next.addedTracks,
         next.updatedTracks,
+        next.removedTracks,
         next.errors.length,
         JSON.stringify(next.errors),
         typeof update.cancelRequested === 'boolean' ? (update.cancelRequested ? 1 : 0) : null,
@@ -227,6 +232,29 @@ export class LibraryStore {
     };
   }
 
+  removeTracksMissingFromFolder(folderId: string, discoveredPaths: string[]): number {
+    const normalizedPaths = discoveredPaths.map((filePath) => resolve(filePath));
+
+    if (normalizedPaths.length === 0) {
+      const result = this.database.prepare('DELETE FROM tracks WHERE folder_id = ?').run(folderId);
+      return Number(result.changes ?? 0);
+    }
+
+    const keep = new Set(normalizedPaths);
+    const existingRows = this.database.prepare('SELECT id, path FROM tracks WHERE folder_id = ?').all(folderId);
+    const missingIds = existingRows
+      .filter((row) => !keep.has(String(row.path)))
+      .map((row) => String(row.id));
+
+    let removed = 0;
+    for (const id of missingIds) {
+      const result = this.database.prepare('DELETE FROM tracks WHERE id = ?').run(id);
+      removed += Number(result.changes ?? 0);
+    }
+
+    return removed;
+  }
+
   upsertTrack(track: TrackWrite): 'added' | 'updated' {
     const existing = this.database.prepare('SELECT id, created_at FROM tracks WHERE path = ?').get(track.path);
     const createdAt = typeof existing?.created_at === 'string' ? existing.created_at : (track.createdAt ?? track.updatedAt);
@@ -236,9 +264,9 @@ export class LibraryStore {
       .prepare(
         `INSERT INTO tracks (
           id, path, folder_id, size_bytes, mtime_ms, title, artist, album, album_artist,
-          duration, codec, sample_rate, bit_depth, bitrate, cover_id, field_sources_json,
+          track_no, disc_no, year, duration, codec, sample_rate, bit_depth, bitrate, cover_id, field_sources_json,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
           folder_id = excluded.folder_id,
           size_bytes = excluded.size_bytes,
@@ -247,6 +275,9 @@ export class LibraryStore {
           artist = excluded.artist,
           album = excluded.album,
           album_artist = excluded.album_artist,
+          track_no = excluded.track_no,
+          disc_no = excluded.disc_no,
+          year = excluded.year,
           duration = excluded.duration,
           codec = excluded.codec,
           sample_rate = excluded.sample_rate,
@@ -266,6 +297,9 @@ export class LibraryStore {
         track.artist,
         track.album,
         track.albumArtist,
+        track.trackNo,
+        track.discNo,
+        track.year,
         track.duration,
         track.codec,
         track.sampleRate,
@@ -316,9 +350,9 @@ export class LibraryStore {
 
     const tracks = this.database
       .prepare(
-        `SELECT id, album, album_artist, duration, cover_id
+         `SELECT id, path, artist, album, album_artist, year, duration, cover_id
          FROM tracks
-         ORDER BY album_artist COLLATE NOCASE, album COLLATE NOCASE`,
+         ORDER BY album_artist COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE`,
       )
       .all();
 
@@ -339,9 +373,16 @@ export class LibraryStore {
 
     tracks.forEach((track, index) => {
       const trackId = String(track.id);
-      const title = String(track.album || 'Unknown Album');
-      const albumArtist = String(track.album_artist || 'Unknown Artist');
-      const albumKey = albumService.makeAlbumKey(title, albumArtist, trackId);
+      const title = String(track.album || '');
+      const albumArtist = String(track.album_artist || '');
+      const albumKey = albumService.makeAlbumKey({
+        albumTitle: title,
+        albumArtist,
+        fallbackArtist: String(track.artist || ''),
+        year: typeof track.year === 'number' ? track.year : null,
+        filePath: String(track.path),
+        trackId,
+      });
       const albumId = albumIdsByKey.get(albumKey) ?? randomUUID();
 
       albumIdsByKey.set(albumKey, albumId);
@@ -351,8 +392,8 @@ export class LibraryStore {
         {
           id: albumId,
           albumKey,
-          title,
-          albumArtist,
+          title: title || 'Unknown Album',
+          albumArtist: albumArtist || String(track.artist || 'Unknown Artist'),
           trackCount: 0,
           duration: 0,
           coverId: typeof track.cover_id === 'string' ? track.cover_id : null,
@@ -410,6 +451,7 @@ export class LibraryStore {
       .prepare(
         `SELECT
           tracks.id, tracks.path, tracks.title, tracks.artist, tracks.album, tracks.album_artist,
+          tracks.track_no, tracks.disc_no, tracks.year,
           tracks.duration, tracks.codec, tracks.sample_rate, tracks.bit_depth, tracks.bitrate,
           tracks.cover_id, tracks.field_sources_json, covers.cover_thumb
         FROM tracks
@@ -453,6 +495,38 @@ export class LibraryStore {
 
     return {
       items: rows.map((row) => this.mapAlbum(row)),
+      page,
+      pageSize,
+      total,
+      hasMore: offset + rows.length < total,
+    };
+  }
+
+  getAlbumTracks(albumId: string, query?: Pick<LibraryPageQuery, 'page' | 'pageSize'>): LibraryPage<LibraryTrack> {
+    const { page, pageSize } = pageFromQuery(query);
+    const offset = (page - 1) * pageSize;
+    const totalRow = this.database
+      .prepare('SELECT COUNT(*) AS total FROM album_tracks WHERE album_id = ?')
+      .get(albumId);
+    const rows = this.database
+      .prepare(
+        `SELECT
+          tracks.id, tracks.path, tracks.title, tracks.artist, tracks.album, tracks.album_artist,
+          tracks.track_no, tracks.disc_no, tracks.year,
+          tracks.duration, tracks.codec, tracks.sample_rate, tracks.bit_depth, tracks.bitrate,
+          tracks.cover_id, tracks.field_sources_json, covers.cover_thumb
+        FROM album_tracks
+        INNER JOIN tracks ON tracks.id = album_tracks.track_id
+        LEFT JOIN covers ON covers.id = tracks.cover_id
+        WHERE album_tracks.album_id = ?
+        ORDER BY album_tracks.position ASC
+        LIMIT ? OFFSET ?`,
+      )
+      .all(albumId, pageSize, offset);
+    const total = Number(totalRow?.total ?? 0);
+
+    return {
+      items: rows.map((row) => this.mapTrack(row)),
       page,
       pageSize,
       total,
@@ -525,11 +599,13 @@ export class LibraryStore {
       id: String(row.id),
       folderId: String(row.folder_id),
       status: this.mapScanStatus(row.status),
+      phase: this.mapScanPhase(row.phase),
       totalFiles: Number(row.total_files ?? 0),
       processedFiles: Number(row.processed_files ?? 0),
       skippedFiles: Number(row.skipped_files ?? 0),
       addedTracks: Number(row.added_tracks ?? 0),
       updatedTracks: Number(row.updated_tracks ?? 0),
+      removedTracks: Number(row.removed_tracks ?? 0),
       errorCount: Number(row.error_count ?? 0),
       errors: parseErrors(row.errors_json),
       startedAt: typeof row.started_at === 'string' ? row.started_at : null,
@@ -551,6 +627,25 @@ export class LibraryStore {
     return 'failed';
   }
 
+  private mapScanPhase(value: unknown): LibraryScanStatus['phase'] {
+    if (
+      value === 'queued' ||
+      value === 'discovering_files' ||
+      value === 'checking_cache' ||
+      value === 'reading_metadata' ||
+      value === 'extracting_covers' ||
+      value === 'grouping_albums' ||
+      value === 'writing_database' ||
+      value === 'finished' ||
+      value === 'failed' ||
+      value === 'cancelled'
+    ) {
+      return value;
+    }
+
+    return 'queued';
+  }
+
   private mapTrack(row: Record<string, unknown>): LibraryTrack {
     return {
       id: String(row.id),
@@ -559,13 +654,16 @@ export class LibraryStore {
       artist: String(row.artist),
       album: String(row.album),
       albumArtist: String(row.album_artist),
+      trackNo: typeof row.track_no === 'number' ? row.track_no : null,
+      discNo: typeof row.disc_no === 'number' ? row.disc_no : null,
+      year: typeof row.year === 'number' ? row.year : null,
       duration: Number(row.duration ?? 0),
       codec: typeof row.codec === 'string' ? row.codec : null,
       sampleRate: typeof row.sample_rate === 'number' ? row.sample_rate : null,
       bitDepth: typeof row.bit_depth === 'number' ? row.bit_depth : null,
       bitrate: typeof row.bitrate === 'number' ? row.bitrate : null,
       coverId: typeof row.cover_id === 'string' ? row.cover_id : null,
-      coverThumb: typeof row.cover_thumb === 'string' ? row.cover_thumb : null,
+      coverThumb: this.toFileUrl(row.cover_thumb),
       fieldSources: parseJsonObject(row.field_sources_json),
     };
   }
@@ -579,7 +677,15 @@ export class LibraryStore {
       trackCount: Number(row.track_count ?? 0),
       duration: Number(row.duration ?? 0),
       coverId: typeof row.cover_id === 'string' ? row.cover_id : null,
-      coverThumb: typeof row.cover_thumb === 'string' ? row.cover_thumb : null,
+      coverThumb: this.toFileUrl(row.cover_thumb),
     };
+  }
+
+  private toFileUrl(value: unknown): string | null {
+    if (typeof value !== 'string' || !value) {
+      return null;
+    }
+
+    return pathToFileURL(value).toString();
   }
 }

@@ -9,30 +9,33 @@
 - empty UI shell
 - architecture and rule documents
 
-Current Phase 0 intentionally does not implement scanning, playback, or SQLite.
+Phase 0 intentionally kept scanning, playback, and SQLite out of the shell.
 
 ## Phase 1: Library Core
 
 - SQLite schema and migrations for folders, tracks, albums, album tracks, artists, covers, and scan jobs
 - local library folders
-- background scan jobs with status, cancellation, progress, and errors
+- background scan jobs with status, phase, cancellation, progress, and errors
 - incremental scanning by `path + size_bytes + mtime_ms`
-- embedded metadata reading
-- cover asset structure for thumb, large, and original
+- embedded metadata reading with per-field source tracking
+- persisted cover cache files for thumb, large, and original
 - transaction-backed scan writes
-- album grouping by album title and album artist
+- album grouping by album title, album artist/folder fallback, and year
+- persisted album wall data that survives restart
 - `SongsPage` with paged API reads and virtualized rows
-- `AlbumsPage` with paged album wall
-- focused tests for migration, scanning, metadata priority, album grouping, pagination, and cover safety
+- `AlbumsPage` with paged album-wall reads from SQLite
+- focused tests for migration, scanning, metadata priority, cover priority, album grouping, restart persistence, pagination, and scan errors
 
 Deferred beyond the minimal Phase 1 loop:
 
 - FTS-backed search
-- real thumbnail generation
+- real image resizing for thumbnail variants
 - manual metadata editing
 - sidecar metadata
 - network completion
 - artist detail pages
+- full file management
+- lyrics, MV, streaming, and downloaders
 
 ## Phase 2: Audio Core
 

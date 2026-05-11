@@ -80,9 +80,24 @@ Network metadata must never overwrite embedded tags.
 
 Every stored track must preserve per-field source information in `field_sources_json`.
 
+Phase 1 must persist at least:
+
+- `title`
+- `artist`
+- `album`
+- `albumArtist`
+- `trackNo`
+- `discNo`
+- `year`
+- `duration`
+- `codec`
+- `sampleRate`
+- `bitDepth`
+- `bitrate`
+
 ## Cover Priority
 
-Cover priority is fixed:
+Long-term cover priority is fixed:
 
 1. user manual cover
 2. embedded cover
@@ -92,6 +107,8 @@ Cover priority is fixed:
 6. generated placeholder
 
 Network covers must never overwrite manual, embedded, or local covers.
+
+Phase 1 implements embedded cover, same-folder `cover/folder/front` images, and generated default cover only. Network cover lookup is forbidden in Phase 1.
 
 Covers must be stored as:
 
@@ -115,6 +132,50 @@ All long tasks must be:
 This includes scanning, metadata extraction, cover generation, audio analysis, and future network enrichment.
 
 Local library scans must skip metadata parsing when `path + size_bytes + mtime_ms` is unchanged.
+
+Scan jobs must report one of these phases:
+
+- `discovering_files`
+- `checking_cache`
+- `reading_metadata`
+- `extracting_covers`
+- `grouping_albums`
+- `writing_database`
+- `finished`
+- `failed`
+- `cancelled`
+
+Per-file metadata or cover errors must be collected without failing the entire scan.
+
+## Library Persistence
+
+SQLite is the source of truth after a scan. Restarting the app must not reparse the whole library.
+
+Required persisted tables:
+
+- `folders`
+- `tracks`
+- `albums`
+- `album_tracks`
+- `artists`
+- `covers`
+- `scan_jobs`
+
+Album wall views must read the `albums` table. They must not regroup the full track table in the renderer.
+
+If a file is removed from a scanned folder, the next scan removes its track row. Disk files must never be deleted by Library Core.
+
+## Album Grouping
+
+Album grouping must be performed in Library Core and persisted.
+
+Rules:
+
+- same album + same album artist merges
+- same album + different album artist does not merge
+- album artist missing or unknown uses folder path as a weak separator
+- empty or unknown album values must not collapse into one giant album
+- year participates in the album key when available
 
 ## Testing Rules
 

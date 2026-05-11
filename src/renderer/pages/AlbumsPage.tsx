@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Disc3, RefreshCw } from 'lucide-react';
-import type { LibraryAlbum } from '../../shared/types/library';
+import { ChevronDown, Disc3, RefreshCw, Search } from 'lucide-react';
+import type { LibraryAlbum, LibrarySort } from '../../shared/types/library';
 
 const pageSize = 60;
 
@@ -9,41 +9,56 @@ export const AlbumsPage = (): JSX.Element => {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<LibrarySort>('title');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
 
-  const loadAlbums = useCallback(async (nextPage: number, mode: 'replace' | 'append') => {
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    setIsLoading(true);
-    setError(null);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSearch(searchInput.trim());
+    }, 250);
 
-    try {
-      const result = await window.echo.library.getAlbums({
-        page: nextPage,
-        pageSize,
-        sort: 'title',
-      });
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
-      if (requestIdRef.current !== requestId) {
-        return;
-      }
+  const loadAlbums = useCallback(
+    async (nextPage: number, mode: 'replace' | 'append') => {
+      const requestId = requestIdRef.current + 1;
+      requestIdRef.current = requestId;
+      setIsLoading(true);
+      setError(null);
 
-      setAlbums((current) => (mode === 'append' ? [...current, ...result.items] : result.items));
-      setPage(result.page);
-      setTotal(result.total);
-      setHasMore(result.hasMore);
-    } catch (loadError) {
-      if (requestIdRef.current === requestId) {
-        setError(loadError instanceof Error ? loadError.message : String(loadError));
+      try {
+        const result = await window.echo.library.getAlbums({
+          page: nextPage,
+          pageSize,
+          search,
+          sort,
+        });
+
+        if (requestIdRef.current !== requestId) {
+          return;
+        }
+
+        setAlbums((current) => (mode === 'append' ? [...current, ...result.items] : result.items));
+        setPage(result.page);
+        setTotal(result.total);
+        setHasMore(result.hasMore);
+      } catch (loadError) {
+        if (requestIdRef.current === requestId) {
+          setError(loadError instanceof Error ? loadError.message : String(loadError));
+        }
+      } finally {
+        if (requestIdRef.current === requestId) {
+          setIsLoading(false);
+        }
       }
-    } finally {
-      if (requestIdRef.current === requestId) {
-        setIsLoading(false);
-      }
-    }
-  }, []);
+    },
+    [search, sort],
+  );
 
   useEffect(() => {
     void loadAlbums(1, 'replace');
@@ -53,15 +68,36 @@ export const AlbumsPage = (): JSX.Element => {
     <div className="albums-page">
       <header className="songs-header">
         <div className="songs-title-group">
-          <h1>专辑</h1>
-          <span>{total} 张</span>
+          <h1>Albums</h1>
+          <span>{total} total</span>
         </div>
-        <button className="tool-button album-refresh" type="button" aria-label="刷新" title="刷新" onClick={() => loadAlbums(1, 'replace')}>
+        <button className="tool-button album-refresh" type="button" aria-label="Refresh" title="Refresh" onClick={() => loadAlbums(1, 'replace')}>
           <RefreshCw size={17} />
         </button>
       </header>
 
-      <section className="album-wall" aria-label="专辑列表">
+      <div className="songs-control-row">
+        <label className="search-box">
+          <Search size={18} aria-hidden="true" />
+          <input
+            type="search"
+            placeholder="Search albums / artists"
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </label>
+
+        <label className="sort-button sort-select">
+          <select value={sort} onChange={(event) => setSort(event.target.value as LibrarySort)}>
+            <option value="title">Title</option>
+            <option value="artist">Artist</option>
+            <option value="recent">Recent</option>
+          </select>
+          <ChevronDown size={15} />
+        </label>
+      </div>
+
+      <section className="album-wall" aria-label="Album list">
         {albums.map((album) => (
           <article className="album-card" key={album.id}>
             <div className="album-cover" data-empty={!album.coverThumb} aria-hidden="true">
@@ -70,21 +106,21 @@ export const AlbumsPage = (): JSX.Element => {
             <div className="album-copy">
               <strong>{album.title}</strong>
               <span>{album.albumArtist}</span>
-              <small>{album.trackCount} 首</small>
+              <small>{album.trackCount} tracks</small>
             </div>
           </article>
         ))}
       </section>
 
       <div className="list-footer">
-        <span>{error ?? (isLoading ? '正在读取专辑...' : `已加载 ${albums.length} / ${total}`)}</span>
+        <span>{error ?? (isLoading ? 'Loading albums...' : `Loaded ${albums.length} / ${total}`)}</span>
         <button
           className="load-more-button"
           type="button"
           onClick={() => loadAlbums(page + 1, 'append')}
           disabled={!hasMore || isLoading}
         >
-          加载更多
+          Load more
         </button>
       </div>
     </div>

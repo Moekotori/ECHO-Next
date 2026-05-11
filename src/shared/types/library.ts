@@ -20,11 +20,23 @@ export type LibraryScanStatus = {
   id: string;
   folderId: string;
   status: 'queued' | 'running' | 'completed' | 'cancelled' | 'failed';
+  phase:
+    | 'queued'
+    | 'discovering_files'
+    | 'checking_cache'
+    | 'reading_metadata'
+    | 'extracting_covers'
+    | 'grouping_albums'
+    | 'writing_database'
+    | 'finished'
+    | 'failed'
+    | 'cancelled';
   totalFiles: number;
   processedFiles: number;
   skippedFiles: number;
   addedTracks: number;
   updatedTracks: number;
+  removedTracks: number;
   errorCount: number;
   errors: string[];
   startedAt: string | null;
@@ -47,6 +59,9 @@ export type LibraryTrack = {
   artist: string;
   album: string;
   albumArtist: string;
+  trackNo: number | null;
+  discNo: number | null;
+  year: number | null;
   duration: number;
   codec: string | null;
   sampleRate: number | null;
