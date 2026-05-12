@@ -5,6 +5,7 @@ import type {
   MissingMetadataScanResult,
   MissingMetadataField,
   NetworkMetadataScanJobStatus,
+  NetworkApplyOptions,
   NetworkTagCandidate,
   NetworkTagCandidateSearchRequest,
 } from '../../../shared/types/library';
@@ -41,6 +42,15 @@ type MissingMetadataScanProgress = {
 };
 
 const NETWORK_TAG_EDITOR_VISIBLE_THRESHOLD = 0.45;
+
+const sameStringSet = (left: string[], right: string[]): boolean => {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
+};
 
 const runWithConcurrency = async (tasks: Array<() => Promise<void>>, concurrency: number): Promise<void> => {
   let nextIndex = 0;
@@ -135,8 +145,9 @@ export class NetworkMetadataService {
     providerNames?: NetworkProviderName[],
     fields?: MissingMetadataField[],
   ): NetworkMetadataScanJobStatus {
+    const requestedFields = fields ?? [];
     const activeJob = [...this.backgroundScans.values()].find((job) => job.status === 'queued' || job.status === 'running');
-    if (activeJob) {
+    if (activeJob && sameStringSet(activeJob.fields, requestedFields)) {
       return this.cloneScanJob(activeJob);
     }
 
@@ -144,6 +155,7 @@ export class NetworkMetadataService {
     const job: MutableNetworkMetadataScanJobStatus = {
       id: randomUUID(),
       status: 'queued',
+      fields: requestedFields,
       totalTracks: 0,
       processedTracks: 0,
       scannedCount: 0,
@@ -270,12 +282,12 @@ export class NetworkMetadataService {
     });
   }
 
-  applyMissingOnly(candidateId: string): NetworkApplyResult {
-    return this.merge.applyMissingOnly(candidateId);
+  applyMissingOnly(candidateId: string, options?: NetworkApplyOptions): NetworkApplyResult {
+    return this.merge.applyMissingOnly(candidateId, false, options?.fields);
   }
 
-  applySelected(candidateId: string): NetworkApplyResult {
-    return this.merge.applyMissingOnly(candidateId, true);
+  applySelected(candidateId: string, options?: NetworkApplyOptions): NetworkApplyResult {
+    return this.merge.applyMissingOnly(candidateId, true, options?.fields);
   }
 
   getMetadataCandidate(candidateId: string): StoredNetworkMetadataCandidate | null {

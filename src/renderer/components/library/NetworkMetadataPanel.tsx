@@ -36,6 +36,16 @@ const missingFilterOptions: Array<{ field: MissingMetadataField; label: string }
   { field: 'genre', label: '流派' },
 ];
 
+const selectedMissingFieldLabel = (fields: MissingMetadataField[]): string => {
+  if (!fields.length) {
+    return '全部缺失项';
+  }
+
+  return fields
+    .map((field) => missingFilterOptions.find((option) => option.field === field)?.label ?? field)
+    .join('、');
+};
+
 const resultReasonText = (reason: string | undefined): string => {
   switch (reason) {
     case 'score_below_auto_apply_threshold':
@@ -264,8 +274,11 @@ export const NetworkMetadataPanel = (): JSX.Element => {
   }, [loadTrack, t]);
 
   const scanMissing = useCallback(async (): Promise<void> => {
+    const scanFields = [...selectedMissingFields];
+    const scanScope = selectedMissingFieldLabel(scanFields);
     setBusy(true);
     setScanProgress({ label: t('settings.library.networkPanel.scanPreparing'), percent: 5 });
+    setMessage(`正在扫描${scanScope}，只会处理当前筛选范围内的歌曲。`);
     setMessage('正在后台筛选缺失文字元数据的曲目，然后扫描网络来源。切去听歌也会继续跑。');
     setTrack(null);
     setCandidates({ metadata: [], covers: [] });
@@ -281,7 +294,7 @@ export const NetworkMetadataPanel = (): JSX.Element => {
         return;
       }
 
-      let status = await library.startMissingMetadataScan({ limit: 500, fields: selectedMissingFields });
+      let status = await library.startMissingMetadataScan({ limit: 500, fields: scanFields });
       setScanItems(status.items);
       setScanProgress({ label: scanLabel(status, t), percent: scanPercent(status) });
 
@@ -441,7 +454,7 @@ export const NetworkMetadataPanel = (): JSX.Element => {
     try {
       for (let index = 0; index < candidateIds.length; index += 1) {
         const candidateId = candidateIds[index];
-        const result = await library.applyNetworkSelected(candidateId);
+        const result = await library.applyNetworkSelected(candidateId, { fields: selectedMissingFields });
         const appliedKeys = Object.keys(result.appliedFields);
 
         if (appliedKeys.length) {
@@ -485,7 +498,7 @@ export const NetworkMetadataPanel = (): JSX.Element => {
       setBulkApplying(false);
       setBusy(false);
     }
-  }, [findTrackByExactId, scanItems]);
+  }, [findTrackByExactId, scanItems, selectedMissingFields]);
 
   return (
     <section className="audio-dev-panel network-metadata-panel" aria-label={t('settings.library.networkPanel.title')}>

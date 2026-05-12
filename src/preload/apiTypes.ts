@@ -17,6 +17,7 @@ import type {
   LibraryTrack,
   MissingMetadataScanOptions,
   MissingMetadataScanResult,
+  NetworkApplyOptions,
   NetworkApplyResult,
   NetworkCandidateList,
   NetworkMetadataScanJobStatus,
@@ -102,8 +103,8 @@ export type EchoApi = {
       trackId: string,
       options?: Omit<NetworkTagCandidateSearchRequest, 'trackId'>,
     ) => Promise<NetworkTagCandidate[]>;
-    applyNetworkMissingOnly: (candidateId: string) => Promise<NetworkApplyResult>;
-    applyNetworkSelected: (candidateId: string) => Promise<NetworkApplyResult>;
+    applyNetworkMissingOnly: (candidateId: string, options?: NetworkApplyOptions) => Promise<NetworkApplyResult>;
+    applyNetworkSelected: (candidateId: string, options?: NetworkApplyOptions) => Promise<NetworkApplyResult>;
     rejectNetworkCandidate: (candidateId: string) => Promise<NetworkApplyResult>;
   };
   playback: {

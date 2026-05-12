@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { EchoDatabase } from '../../database/createDatabase';
+import type { MissingMetadataField } from '../../../shared/types/library';
 import type { CoverResult, FieldSource, FieldSources } from '../libraryTypes';
 import { NETWORK_AUTO_APPLY_THRESHOLD } from './matchScore';
 import { NetworkMetadataStore } from './NetworkMetadataStore';
@@ -32,7 +33,7 @@ export class NetworkMetadataMerge {
     this.store = new NetworkMetadataStore(database);
   }
 
-  applyMissingOnly(candidateId: string, force = false): NetworkApplyResult {
+  applyMissingOnly(candidateId: string, force = false, fields?: MissingMetadataField[]): NetworkApplyResult {
     const candidate = this.store.getMetadataCandidate(candidateId);
 
     if (!candidate) {
@@ -47,7 +48,7 @@ export class NetworkMetadataMerge {
       return { status: 'rejected', appliedFields: {}, reason: 'candidate_rejected' };
     }
 
-    return this.store.transaction(() => this.applyCandidateInTransaction(candidate, force));
+    return this.store.transaction(() => this.applyCandidateInTransaction(candidate, force, fields));
   }
 
   reject(candidateId: string): NetworkApplyResult {
@@ -95,7 +96,11 @@ export class NetworkMetadataMerge {
     return { status: 'applied_missing_only', appliedFields: { coverId } };
   }
 
-  private applyCandidateInTransaction(candidate: StoredNetworkMetadataCandidate, force: boolean): NetworkApplyResult {
+  private applyCandidateInTransaction(
+    candidate: StoredNetworkMetadataCandidate,
+    force: boolean,
+    fields?: MissingMetadataField[],
+  ): NetworkApplyResult {
     this.store.repairStaleReadiness(candidate.trackId);
     const row = this.database.prepare<[string], DbRow>('SELECT * FROM tracks WHERE id = ? AND missing = 0').get(candidate.trackId);
 
@@ -114,15 +119,32 @@ export class NetworkMetadataMerge {
 
     const fieldSources = parseFieldSources(row.field_sources_json);
     const appliedFields: AppliedNetworkFields = {};
+    const shouldApplyField = (field: MissingMetadataField): boolean => !fields?.length || fields.includes(field);
 
-    this.maybeApplyText(appliedFields, fieldSources, 'title', candidate.title, row.title);
-    this.maybeApplyText(appliedFields, fieldSources, 'artist', candidate.artist, row.artist);
-    this.maybeApplyText(appliedFields, fieldSources, 'album', candidate.album, row.album);
-    this.maybeApplyText(appliedFields, fieldSources, 'albumArtist', candidate.albumArtist, row.album_artist);
-    this.maybeApplyNumber(appliedFields, fieldSources, 'year', candidate.year, row.year);
-    this.maybeApplyText(appliedFields, fieldSources, 'genre', candidate.genre, row.genre);
-    this.maybeApplyNumber(appliedFields, fieldSources, 'trackNo', candidate.trackNo, row.track_no);
-    this.maybeApplyNumber(appliedFields, fieldSources, 'discNo', candidate.discNo, row.disc_no);
+    if (shouldApplyField('title')) {
+      this.maybeApplyText(appliedFields, fieldSources, 'title', candidate.title, row.title);
+    }
+    if (shouldApplyField('artist')) {
+      this.maybeApplyText(appliedFields, fieldSources, 'artist', candidate.artist, row.artist);
+    }
+    if (shouldApplyField('album')) {
+      this.maybeApplyText(appliedFields, fieldSources, 'album', candidate.album, row.album);
+    }
+    if (shouldApplyField('albumArtist')) {
+      this.maybeApplyText(appliedFields, fieldSources, 'albumArtist', candidate.albumArtist, row.album_artist);
+    }
+    if (shouldApplyField('year')) {
+      this.maybeApplyNumber(appliedFields, fieldSources, 'year', candidate.year, row.year);
+    }
+    if (shouldApplyField('genre')) {
+      this.maybeApplyText(appliedFields, fieldSources, 'genre', candidate.genre, row.genre);
+    }
+    if (shouldApplyField('trackNo')) {
+      this.maybeApplyNumber(appliedFields, fieldSources, 'trackNo', candidate.trackNo, row.track_no);
+    }
+    if (shouldApplyField('discNo')) {
+      this.maybeApplyNumber(appliedFields, fieldSources, 'discNo', candidate.discNo, row.disc_no);
+    }
 
     if (Object.keys(appliedFields).length === 0) {
       this.store.recordDecision(candidate.trackId, candidate.id, 'ignored', {});

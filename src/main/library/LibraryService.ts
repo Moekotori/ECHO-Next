@@ -38,6 +38,7 @@ import type {
   EmbeddedTrackTagsLoadResult,
   MissingMetadataField,
   MissingMetadataScanResult,
+  NetworkApplyOptions,
   NetworkMetadataScanJobStatus,
   NetworkApplyResult,
   NetworkTagCandidate,
@@ -408,22 +409,22 @@ export class LibraryService {
     return this.networkMetadataService.searchNetworkTagCandidates(request);
   }
 
-  applyNetworkMissingOnly(candidateId: string): NetworkApplyResult {
+  applyNetworkMissingOnly(candidateId: string, options?: NetworkApplyOptions): NetworkApplyResult {
     if (!this.networkMetadataService) {
       throw new Error('Network metadata service is unavailable');
     }
 
-    return this.networkMetadataService.applyMissingOnly(candidateId);
+    return this.networkMetadataService.applyMissingOnly(candidateId, options);
   }
 
-  async applyNetworkSelected(candidateId: string): Promise<NetworkApplyResult> {
+  async applyNetworkSelected(candidateId: string, options?: NetworkApplyOptions): Promise<NetworkApplyResult> {
     if (!this.networkMetadataService) {
       throw new Error('Network metadata service is unavailable');
     }
 
     const candidate = this.networkMetadataService.getMetadataCandidate(candidateId);
-    const result = this.networkMetadataService.applySelected(candidateId);
-    if (!candidate?.coverUrl) {
+    const result = this.networkMetadataService.applySelected(candidateId, options);
+    if (!candidate?.coverUrl || (options?.fields?.length && !options.fields.includes('cover'))) {
       return result;
     }
 

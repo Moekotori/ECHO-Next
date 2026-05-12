@@ -97,7 +97,7 @@ export class NetworkMetadataStore {
     const predicates: string[] = [];
 
     if (fieldEnabled('cover')) {
-      predicates.push(`covers.id IS NULL OR covers.source_type IS NULL OR covers.source_type = 'default'`);
+      predicates.push(`tracks.cover_id IS NULL OR covers.id IS NULL OR covers.source_type IS NULL OR covers.source_type = 'default'`);
     }
 
     if (fieldEnabled('title')) {
@@ -157,7 +157,9 @@ export class NetworkMetadataStore {
 
     for (const row of rows) {
       const fieldSources = parseJsonObject(row.field_sources_json) as FieldSources;
-      const reasons = this.missingReasons(row, fieldSources);
+      const reasons = selectedFields.length
+        ? this.missingReasonsForFields(row, fieldSources, selectedFields)
+        : this.missingReasons(row, fieldSources);
 
       if (!reasons.length) {
         continue;
@@ -430,7 +432,7 @@ export class NetworkMetadataStore {
   private rowHasMissingField(row: DbRow, fieldSources: FieldSources, field: MissingMetadataField): boolean {
     switch (field) {
       case 'cover':
-        return !textOrNull(row.source_type) || row.source_type === 'default';
+        return !textOrNull(row.cover_id) || !textOrNull(row.source_type) || row.source_type === 'default';
       case 'title':
         return !String(row.title ?? '').trim() || fieldSources.title === 'unknown' || fieldSources.title === 'filename_fallback';
       case 'artist': {
@@ -457,6 +459,49 @@ export class NetworkMetadataStore {
       default:
         return false;
     }
+  }
+
+  private missingReasonsForFields(row: DbRow, fieldSources: FieldSources, fields: MissingMetadataField[]): MissingMetadataReason[] {
+    const reasons = new Set<MissingMetadataReason>();
+
+    for (const field of fields) {
+      if (!this.rowHasMissingField(row, fieldSources, field)) {
+        continue;
+      }
+
+      switch (field) {
+        case 'cover':
+          reasons.add('missing_cover');
+          break;
+        case 'title':
+          reasons.add('missing_title');
+          break;
+        case 'artist':
+          reasons.add('missing_artist');
+          reasons.add('unknown_artist');
+          break;
+        case 'album':
+          reasons.add('missing_album');
+          break;
+        case 'albumArtist':
+          reasons.add('missing_album_artist');
+          break;
+        case 'trackNo':
+          reasons.add('missing_track_no');
+          break;
+        case 'discNo':
+          reasons.add('missing_disc_no');
+          break;
+        case 'year':
+          reasons.add('missing_year');
+          break;
+        case 'genre':
+          reasons.add('missing_genre');
+          break;
+      }
+    }
+
+    return [...reasons];
   }
 
   private mapTrack(row: DbRow, fieldSources: FieldSources): LibraryTrack {

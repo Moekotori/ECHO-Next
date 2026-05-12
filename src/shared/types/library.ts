@@ -319,6 +319,10 @@ export type NetworkApplyResult = {
   reason?: string;
 };
 
+export type NetworkApplyOptions = {
+  fields?: MissingMetadataField[];
+};
+
 export type NetworkRepairResult = NetworkCandidateList & {
   applied: NetworkApplyResult[];
   errors: string[];
@@ -370,6 +374,7 @@ export type MissingMetadataScanResult = {
 export type NetworkMetadataScanJobStatus = MissingMetadataScanResult & {
   id: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
+  fields: MissingMetadataField[];
   totalTracks: number;
   processedTracks: number;
   startedAt: string;

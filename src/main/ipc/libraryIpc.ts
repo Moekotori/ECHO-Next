@@ -9,6 +9,7 @@ import type {
   LibraryTrackTagUpdateRequest,
   MissingMetadataField,
   MissingMetadataScanOptions,
+  NetworkApplyOptions,
   NetworkTagCandidateSearchRequest,
   NetworkTagProvider,
   PlaybackHistoryQuery,
@@ -182,6 +183,22 @@ const normalizeMissingMetadataScanOptions = (value: unknown, fallback: number): 
   return {
     limit: optionalLimit(input.limit, fallback),
     fields: [...new Set(fields)],
+  };
+};
+
+const normalizeNetworkApplyRequest = (value: unknown): { candidateId: string; options: NetworkApplyOptions } => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { candidateId: requireText(value, 'candidateId'), options: {} };
+  }
+
+  const input = value as Record<string, unknown>;
+  const fields = Array.isArray(input.fields)
+    ? input.fields.filter((field): field is MissingMetadataField => typeof field === 'string' && missingMetadataFields.has(field as MissingMetadataField))
+    : [];
+
+  return {
+    candidateId: requireText(input.candidateId, 'candidateId'),
+    options: { fields: [...new Set(fields)] },
   };
 };
 
@@ -473,12 +490,14 @@ export const registerLibraryIpc = (): void => {
       });
     },
   );
-  ipcMain.handle(IpcChannels.LibraryNetworkApplyMissingOnly, (_event, candidateId: unknown) =>
-    getLibraryService().applyNetworkMissingOnly(requireText(candidateId, 'candidateId')),
-  );
-  ipcMain.handle(IpcChannels.LibraryNetworkApplySelected, (_event, candidateId: unknown) =>
-    getLibraryService().applyNetworkSelected(requireText(candidateId, 'candidateId')),
-  );
+  ipcMain.handle(IpcChannels.LibraryNetworkApplyMissingOnly, (_event, request: unknown) => {
+    const { candidateId, options } = normalizeNetworkApplyRequest(request);
+    return getLibraryService().applyNetworkMissingOnly(candidateId, options);
+  });
+  ipcMain.handle(IpcChannels.LibraryNetworkApplySelected, (_event, request: unknown) => {
+    const { candidateId, options } = normalizeNetworkApplyRequest(request);
+    return getLibraryService().applyNetworkSelected(candidateId, options);
+  });
   ipcMain.handle(IpcChannels.LibraryNetworkRejectCandidate, (_event, candidateId: unknown) =>
     getLibraryService().rejectNetworkCandidate(requireText(candidateId, 'candidateId')),
   );

@@ -60,8 +60,10 @@ const echoApi: EchoApi = {
     showNetworkCandidates: (trackId) => ipcRenderer.invoke(IpcChannels.LibraryNetworkShowCandidates, trackId),
     searchNetworkTagCandidates: (trackId, options) =>
       ipcRenderer.invoke(IpcChannels.LibrarySearchNetworkTagCandidates, { trackId, ...options }),
-    applyNetworkMissingOnly: (candidateId) => ipcRenderer.invoke(IpcChannels.LibraryNetworkApplyMissingOnly, candidateId),
-    applyNetworkSelected: (candidateId) => ipcRenderer.invoke(IpcChannels.LibraryNetworkApplySelected, candidateId),
+    applyNetworkMissingOnly: (candidateId, options) =>
+      ipcRenderer.invoke(IpcChannels.LibraryNetworkApplyMissingOnly, { candidateId, ...options }),
+    applyNetworkSelected: (candidateId, options) =>
+      ipcRenderer.invoke(IpcChannels.LibraryNetworkApplySelected, { candidateId, ...options }),
     rejectNetworkCandidate: (candidateId) => ipcRenderer.invoke(IpcChannels.LibraryNetworkRejectCandidate, candidateId),
   },
   playback: {
