@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FileAudio, Pause, Play, RefreshCw, Settings, Square } from 'lucide-react';
+import { FileAudio, FolderPlus, Pause, Play, RefreshCw, RotateCw, Settings, Square, Trash2, XCircle } from 'lucide-react';
 import type { AudioDeviceInfo, AudioOutputMode, AudioOutputSettings, AudioStatus } from '../../shared/types/audio';
+import type { LibraryFolder, LibraryScanStatus } from '../../shared/types/library';
 import { EmptyState } from '../components/ui/EmptyState';
 
 const isDevBuild = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
@@ -36,6 +37,10 @@ export const SettingsPage = (): JSX.Element => {
   const [lastOpenedFile, setLastOpenedFile] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [folders, setFolders] = useState<LibraryFolder[]>([]);
+  const [folderPathInput, setFolderPathInput] = useState('');
+  const [scanStatuses, setScanStatuses] = useState<Record<string, LibraryScanStatus>>({});
+  const [libraryError, setLibraryError] = useState<string | null>(null);
 
   const compatibleDevices = useMemo(
     () => devices.filter((device) => (outputMode === 'asio' ? device.outputMode === 'asio' : device.outputMode === 'shared')),
@@ -62,15 +67,46 @@ export const SettingsPage = (): JSX.Element => {
     }
   }, []);
 
+  const refreshFolders = useCallback(async () => {
+    try {
+      setFolders(await window.echo.library.getFolders());
+      setLibraryError(null);
+    } catch (refreshError) {
+      setLibraryError(refreshError instanceof Error ? refreshError.message : String(refreshError));
+    }
+  }, []);
+
   useEffect(() => {
     void refreshStatus();
     void refreshDevices();
+    void refreshFolders();
     const timer = window.setInterval(() => {
       void refreshStatus();
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [refreshDevices, refreshStatus]);
+  }, [refreshDevices, refreshFolders, refreshStatus]);
+
+  useEffect(() => {
+    const activeJobs = Object.values(scanStatuses).filter((scan) => scan.status === 'queued' || scan.status === 'running');
+
+    if (activeJobs.length === 0) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      for (const scan of activeJobs) {
+        void window.echo.library.getScanStatus(scan.id).then((nextStatus) => {
+          setScanStatuses((current) => ({
+            ...current,
+            [nextStatus.folderId]: nextStatus,
+          }));
+        });
+      }
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [scanStatuses]);
 
   useEffect(() => {
     setOutputMode(status?.outputMode ?? 'shared');
@@ -175,9 +211,144 @@ export const SettingsPage = (): JSX.Element => {
     await refreshStatus();
   };
 
+  const handleAddFolder = async (): Promise<void> => {
+    const folderPath = folderPathInput.trim();
+
+    if (!folderPath) {
+      return;
+    }
+
+    try {
+      const folder = await window.echo.library.addFolder(folderPath);
+      const scan = await window.echo.library.scanFolder(folder.id);
+      setFolderPathInput('');
+      setScanStatuses((current) => ({
+        ...current,
+        [folder.id]: scan,
+      }));
+      await refreshFolders();
+    } catch (addError) {
+      setLibraryError(addError instanceof Error ? addError.message : String(addError));
+    }
+  };
+
+  const handleScanFolder = async (folderId: string): Promise<void> => {
+    try {
+      const scan = await window.echo.library.scanFolder(folderId);
+      setScanStatuses((current) => ({
+        ...current,
+        [folderId]: scan,
+      }));
+    } catch (scanError) {
+      setLibraryError(scanError instanceof Error ? scanError.message : String(scanError));
+    }
+  };
+
+  const handleCancelScan = async (folderId: string, jobId: string): Promise<void> => {
+    try {
+      const scan = await window.echo.library.cancelScan(jobId);
+      setScanStatuses((current) => ({
+        ...current,
+        [folderId]: scan,
+      }));
+    } catch (cancelError) {
+      setLibraryError(cancelError instanceof Error ? cancelError.message : String(cancelError));
+    }
+  };
+
+  const handleRemoveFolder = async (folderId: string): Promise<void> => {
+    try {
+      await window.echo.library.removeFolder(folderId);
+      setScanStatuses((current) => {
+        const next = { ...current };
+        delete next[folderId];
+        return next;
+      });
+      await refreshFolders();
+    } catch (removeError) {
+      setLibraryError(removeError instanceof Error ? removeError.message : String(removeError));
+    }
+  };
+
+  const libraryPanel = (
+    <section className="audio-dev-panel" aria-label="Library folders">
+      <div className="audio-dev-header">
+        <div>
+          <span className="panel-kicker">Library</span>
+          <h2>Folders</h2>
+        </div>
+        <button className="tool-button" type="button" aria-label="Refresh folders" title="Refresh folders" onClick={() => void refreshFolders()}>
+          <RefreshCw size={17} />
+        </button>
+      </div>
+
+      <div className="library-folder-entry">
+        <label className="audio-field">
+          <span>folder path</span>
+          <input
+            type="text"
+            placeholder="D:\\Music"
+            value={folderPathInput}
+            onChange={(event) => setFolderPathInput(event.target.value)}
+          />
+        </label>
+        <button className="audio-command-button" type="button" onClick={() => void handleAddFolder()} disabled={!folderPathInput.trim()}>
+          <FolderPlus size={17} />
+          <span>Add and scan</span>
+        </button>
+      </div>
+
+      {libraryError ? <p className="audio-error">{libraryError}</p> : null}
+
+      {folders.length === 0 ? (
+        <p className="audio-empty">No library folders have been imported yet.</p>
+      ) : (
+        <div className="library-folder-list">
+          {folders.map((folder) => {
+            const scan = scanStatuses[folder.id];
+            const isScanning = scan?.status === 'queued' || scan?.status === 'running';
+
+            return (
+              <div className="library-folder-row" key={folder.id}>
+                <div>
+                  <strong>{folder.name}</strong>
+                  <span>{folder.path}</span>
+                  {scan ? (
+                    <small>
+                      {scan.status} / {scan.phase} / {scan.processedFiles}/{scan.totalFiles} parsed, {scan.skippedFiles} skipped
+                    </small>
+                  ) : (
+                    <small>Ready</small>
+                  )}
+                </div>
+                <button className="audio-icon-command" type="button" aria-label="Scan folder" title="Scan folder" onClick={() => void handleScanFolder(folder.id)} disabled={isScanning}>
+                  <RotateCw size={17} />
+                </button>
+                <button
+                  className="audio-icon-command"
+                  type="button"
+                  aria-label="Cancel scan"
+                  title="Cancel scan"
+                  onClick={() => scan && void handleCancelScan(folder.id, scan.id)}
+                  disabled={!isScanning || !scan}
+                >
+                  <XCircle size={17} />
+                </button>
+                <button className="audio-icon-command danger" type="button" aria-label="Remove folder" title="Remove folder" onClick={() => void handleRemoveFolder(folder.id)}>
+                  <Trash2 size={17} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+
   if (!isDevBuild) {
     return (
       <div className="settings-preview page-stack">
+        {libraryPanel}
         <div className="settings-row">
           <span>Theme</span>
           <strong>Light</strong>
@@ -202,6 +373,8 @@ export const SettingsPage = (): JSX.Element => {
 
   return (
     <div className="settings-preview page-stack">
+      {libraryPanel}
+
       <section className="audio-dev-panel" aria-label="Audio host acceptance">
         <div className="audio-dev-header">
           <div>

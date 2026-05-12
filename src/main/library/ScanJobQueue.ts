@@ -1,15 +1,34 @@
 import { randomUUID } from 'node:crypto';
 import type { AlbumService } from './AlbumService';
-import type { CoverService } from './CoverService';
-import type { LibraryScanner } from './LibraryScanner';
 import type { LibraryStore } from './LibraryStore';
-import type { MetadataService } from './MetadataService';
-import type { LibraryFolder, LibraryScanStatus, ParsedTrackMetadata, ScannedAudioFile } from './libraryTypes';
+import type {
+  CoverResult,
+  LibraryFolder,
+  LibraryScanStatus,
+  MetadataResult,
+  ScannedAudioFile,
+  ScannedFile,
+} from './libraryTypes';
+import type { CoverExtractor } from './workers/CoverExtractor';
+import type { FileScanner } from './workers/FileScanner';
+import type { MetadataReader } from './workers/MetadataReader';
 
 type ParsedScanItem = {
   file: ScannedAudioFile;
-  metadata: ParsedTrackMetadata;
+  metadata: MetadataResult;
+  cover: CoverResult | null;
   existingTrackId: string | null;
+};
+
+type ChangedFile = {
+  file: ScannedAudioFile;
+  existingTrackId: string | null;
+};
+
+type ScanJobQueueOptions = {
+  coverCacheDir: string;
+  metadataConcurrency?: number;
+  coverConcurrency?: number;
 };
 
 class ScanCancelledError extends Error {
@@ -20,15 +39,22 @@ class ScanCancelledError extends Error {
 
 export class ScanJobQueue {
   private readonly runningJobs = new Map<string, Promise<void>>();
-  private readonly metadataConcurrency = 2;
+  private readonly metadataConcurrency: number;
+  private readonly coverConcurrency: number;
+  private readonly coverCacheDir: string;
 
   constructor(
     private readonly store: LibraryStore,
-    private readonly scanner: LibraryScanner,
-    private readonly metadataService: MetadataService,
-    private readonly coverService: CoverService,
+    private readonly fileScanner: FileScanner,
+    private readonly metadataReader: MetadataReader,
+    private readonly coverExtractor: CoverExtractor,
     private readonly albumService: AlbumService,
-  ) {}
+    options: ScanJobQueueOptions,
+  ) {
+    this.metadataConcurrency = options.metadataConcurrency ?? 2;
+    this.coverConcurrency = options.coverConcurrency ?? 2;
+    this.coverCacheDir = options.coverCacheDir;
+  }
 
   scanFolder(folder: LibraryFolder): LibraryScanStatus {
     const job = this.store.createScanJob(folder.id);
@@ -77,28 +103,27 @@ export class ScanJobQueue {
     let addedTracks = 0;
     let updatedTracks = 0;
     let removedTracks = 0;
+    let coverCount = 0;
     const errors: string[] = [];
 
     try {
       this.store.updateScanJob(jobId, {
         status: 'running',
-        phase: 'discovering_files',
+        phase: 'discovering',
         startedAt,
       });
 
-      const files = await this.scanner.scanFolder(folder.id, folder.path);
+      const files = await this.discoverFiles(jobId, folder, errors);
       this.store.updateScanJob(jobId, {
         phase: 'checking_cache',
         totalFiles: files.length,
+        errors,
       });
 
-      const changedItems: ParsedScanItem[] = [];
-      const changedFiles: Array<{ file: ScannedAudioFile; existingTrackId: string | null }> = [];
+      const changedFiles: ChangedFile[] = [];
 
       for (const file of files) {
-        if (this.store.isScanCancelled(jobId)) {
-          throw new ScanCancelledError();
-        }
+        this.throwIfCancelled(jobId);
 
         const existing = this.store.findTrackFingerprint(file.path);
 
@@ -125,19 +150,21 @@ export class ScanJobQueue {
         errors,
       });
 
+      const parsedItems: ParsedScanItem[] = [];
+
       await this.processWithConcurrency(changedFiles, this.metadataConcurrency, async (item) => {
-        if (this.store.isScanCancelled(jobId)) {
-          throw new ScanCancelledError();
-        }
+        this.throwIfCancelled(jobId);
 
         try {
-          const metadata = await this.metadataService.read(item.file);
-          changedItems.push({
+          const metadata = await this.metadataReader.read(item.file.path);
+          this.collectWorkerMessages(errors, item.file.path, 'metadata', metadata.warnings, metadata.errors);
+          parsedItems.push({
             ...item,
             metadata,
+            cover: null,
           });
         } catch (error) {
-          errors.push(`${item.file.path}: ${error instanceof Error ? error.message : String(error)}`);
+          errors.push(`${item.file.path}: metadata: ${error instanceof Error ? error.message : String(error)}`);
         }
 
         processedFiles += 1;
@@ -149,9 +176,7 @@ export class ScanJobQueue {
         });
       });
 
-      if (this.store.isScanCancelled(jobId)) {
-        throw new ScanCancelledError();
-      }
+      this.throwIfCancelled(jobId);
 
       this.store.updateScanJob(jobId, {
         phase: 'extracting_covers',
@@ -160,28 +185,55 @@ export class ScanJobQueue {
         errors,
       });
 
+      const coverTimestamp = new Date().toISOString();
+      await this.processWithConcurrency(parsedItems, this.coverConcurrency, async (item) => {
+        this.throwIfCancelled(jobId);
+
+        try {
+          const cover = await this.coverExtractor.extract(item.file.path, {
+            cacheRoot: this.coverCacheDir,
+            metadata: item.metadata,
+            now: coverTimestamp,
+          });
+          this.collectWorkerMessages(errors, item.file.path, 'cover', cover.warnings, cover.errors);
+          item.cover = cover;
+          coverCount += 1;
+        } catch (error) {
+          errors.push(`${item.file.path}: cover: ${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        this.store.updateScanJob(jobId, {
+          phase: 'extracting_covers',
+          processedFiles,
+          skippedFiles,
+          coverCount,
+          errors,
+        });
+      });
+
+      this.throwIfCancelled(jobId);
+
       this.store.transaction(() => {
         const timestamp = new Date().toISOString();
 
-        removedTracks = this.store.removeTracksMissingFromFolder(
+        removedTracks = this.store.markTracksMissingFromFolder(
           folder.id,
           files.map((file) => file.path),
+          timestamp,
         );
 
-        for (const item of changedItems) {
-          let coverId: string | null = null;
-
-          try {
-            coverId = this.coverService.ensureCover(item.file.path, item.metadata, timestamp);
-          } catch (error) {
-            errors.push(`${item.file.path}: cover: ${error instanceof Error ? error.message : String(error)}`);
-          }
-
+        for (const item of parsedItems) {
+          const coverId = item.cover ? this.store.upsertCover(item.cover, timestamp) : null;
           const result = this.store.upsertTrack({
             ...item.file,
-            ...item.metadata,
+            ...item.metadata.fields,
             id: item.existingTrackId ?? randomUUID(),
             coverId,
+            fieldSources: item.metadata.fieldSources,
+            embeddedCover: item.metadata.embeddedCover,
+            metadataStatus: item.metadata.status,
+            warnings: item.metadata.warnings,
+            errors: item.metadata.errors,
             updatedAt: timestamp,
           });
 
@@ -199,6 +251,7 @@ export class ScanJobQueue {
           addedTracks,
           updatedTracks,
           removedTracks,
+          coverCount,
           errors,
         });
         this.store.refreshAlbums(this.albumService, timestamp);
@@ -210,8 +263,10 @@ export class ScanJobQueue {
           addedTracks,
           updatedTracks,
           removedTracks,
+          coverCount,
           errors,
         });
+        this.store.finishFolderScan(folder.id, timestamp);
         this.store.updateScanJob(jobId, {
           status: 'completed',
           phase: 'finished',
@@ -220,6 +275,7 @@ export class ScanJobQueue {
           addedTracks,
           updatedTracks,
           removedTracks,
+          coverCount,
           errors,
           finishedAt: new Date().toISOString(),
         });
@@ -234,6 +290,7 @@ export class ScanJobQueue {
           addedTracks,
           updatedTracks,
           removedTracks,
+          coverCount,
           errors,
           finishedAt: new Date().toISOString(),
         });
@@ -249,9 +306,63 @@ export class ScanJobQueue {
         addedTracks,
         updatedTracks,
         removedTracks,
+        coverCount,
         errors,
         finishedAt: new Date().toISOString(),
       });
+    }
+  }
+
+  private async discoverFiles(jobId: string, folder: LibraryFolder, errors: string[]): Promise<ScannedAudioFile[]> {
+    const files: ScannedAudioFile[] = [];
+
+    try {
+      for await (const file of this.fileScanner.scanFolder(folder.path)) {
+        this.throwIfCancelled(jobId);
+        files.push(this.withFolderId(file, folder.id));
+
+        if (files.length % 100 === 0) {
+          this.store.updateScanJob(jobId, {
+            phase: 'discovering',
+            totalFiles: files.length,
+            errors,
+          });
+        }
+      }
+    } catch (error) {
+      errors.push(`${folder.path}: scanner: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+
+    return files;
+  }
+
+  private withFolderId(file: ScannedFile, folderId: string): ScannedAudioFile {
+    return {
+      ...file,
+      folderId,
+    };
+  }
+
+  private throwIfCancelled(jobId: string): void {
+    if (this.store.isScanCancelled(jobId)) {
+      throw new ScanCancelledError();
+    }
+  }
+
+  private collectWorkerMessages(
+    errors: string[],
+    filePath: string,
+    workerName: string,
+    warnings: string[],
+    workerErrors: string[],
+  ): void {
+    for (const warning of warnings) {
+      errors.push(`${filePath}: ${workerName} warning: ${warning}`);
+    }
+
+    for (const error of workerErrors) {
+      errors.push(`${filePath}: ${workerName}: ${error}`);
     }
   }
 

@@ -376,6 +376,16 @@
   background: #ffffff;
 }
 
+.audio-field input {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 10px;
+  color: #25364b;
+  border: 1px solid rgba(35, 55, 80, 0.12);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
 .audio-command-button,
 .audio-icon-command {
   display: inline-flex;
@@ -465,6 +475,58 @@
   display: grid;
   gap: 6px;
   padding-top: 2px;
+}
+
+.library-folder-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.library-folder-list {
+  display: grid;
+  gap: 8px;
+}
+
+.library-folder-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px 34px 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(38, 64, 94, 0.08);
+  border-radius: 8px;
+  background: rgba(246, 250, 255, 0.82);
+}
+
+.library-folder-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.library-folder-row strong,
+.library-folder-row span,
+.library-folder-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-folder-row strong {
+  color: #1e3047;
+  font-size: 13px;
+}
+
+.library-folder-row span,
+.library-folder-row small {
+  color: #657487;
+  font-size: 12px;
+}
+
+.audio-icon-command.danger {
+  color: var(--color-red);
 }
 
 .player-now {
@@ -641,9 +703,11 @@
   }
 
   .metric-strip,
-  .album-grid-preview,
-  .artist-columns,
-  .audio-host-strip,
+    .album-grid-preview,
+    .artist-columns,
+    .library-folder-entry,
+    .library-folder-row,
+    .audio-host-strip,
   .audio-status-grid,
   .audio-controls-grid,
   .now-playing-shell {

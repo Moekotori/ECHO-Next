@@ -25,6 +25,8 @@ export type ScannedAudioFile = {
   mtimeMs: number;
 };
 
+export type ScannedFile = Omit<ScannedAudioFile, 'folderId'>;
+
 export type FieldSource =
   | 'manual'
   | 'embedded'
@@ -37,7 +39,12 @@ export type FieldSource =
 
 export type FieldSources = Record<string, FieldSource>;
 
-export type ParsedTrackMetadata = {
+export type EmbeddedCoverData = {
+  data: Uint8Array;
+  mimeType: string | null;
+};
+
+export type MetadataFields = {
   title: string;
   artist: string;
   album: string;
@@ -45,16 +52,32 @@ export type ParsedTrackMetadata = {
   trackNo: number | null;
   discNo: number | null;
   year: number | null;
+  genre: string | null;
   duration: number;
   codec: string | null;
   sampleRate: number | null;
   bitDepth: number | null;
   bitrate: number | null;
+};
+
+export type MetadataStatus = 'ok' | 'fallback' | 'error';
+
+export type MetadataResult = {
+  fields: MetadataFields;
   fieldSources: FieldSources;
-  embeddedCover?: {
-    data: Uint8Array;
-    mimeType: string | null;
-  };
+  embeddedCover?: EmbeddedCoverData;
+  warnings: string[];
+  errors: string[];
+  status: MetadataStatus;
+  raw?: unknown;
+};
+
+export type ParsedTrackMetadata = MetadataFields & {
+  fieldSources: FieldSources;
+  embeddedCover?: EmbeddedCoverData;
+  warnings?: string[];
+  errors?: string[];
+  metadataStatus?: MetadataStatus;
 };
 
 export type TrackWrite = ParsedTrackMetadata &
@@ -64,6 +87,30 @@ export type TrackWrite = ParsedTrackMetadata &
     createdAt?: string;
     updatedAt: string;
   };
+
+export type CoverSource = 'embedded' | 'folder' | 'default';
+
+export type CoverResult = {
+  source: CoverSource;
+  thumbPath: string;
+  largePath: string;
+  originalRef: string;
+  sourceHash: string;
+  mimeType: string | null;
+  warnings: string[];
+  errors: string[];
+};
+
+export type CoverExtractOptions = {
+  cacheRoot: string;
+  metadata?: MetadataResult | ParsedTrackMetadata;
+  now?: string;
+};
+
+export type ScanOptions = {
+  signal?: AbortSignal;
+  audioExtensions?: readonly string[];
+};
 
 export type StoredTrackFingerprint = {
   id: string;
@@ -81,6 +128,7 @@ export type ScanJobUpdate = Partial<
     | 'addedTracks'
     | 'updatedTracks'
     | 'removedTracks'
+    | 'coverCount'
     | 'errorCount'
     | 'errors'
     | 'phase'

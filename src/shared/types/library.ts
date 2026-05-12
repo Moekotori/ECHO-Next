@@ -22,7 +22,7 @@ export type LibraryScanStatus = {
   status: 'queued' | 'running' | 'completed' | 'cancelled' | 'failed';
   phase:
     | 'queued'
-    | 'discovering_files'
+    | 'discovering'
     | 'checking_cache'
     | 'reading_metadata'
     | 'extracting_covers'
@@ -37,6 +37,7 @@ export type LibraryScanStatus = {
   addedTracks: number;
   updatedTracks: number;
   removedTracks: number;
+  coverCount?: number;
   errorCount: number;
   errors: string[];
   startedAt: string | null;
@@ -62,6 +63,7 @@ export type LibraryTrack = {
   trackNo: number | null;
   discNo: number | null;
   year: number | null;
+  genre: string | null;
   duration: number;
   codec: string | null;
   sampleRate: number | null;
@@ -69,6 +71,7 @@ export type LibraryTrack = {
   bitrate: number | null;
   coverId: string | null;
   coverThumb: string | null;
+  metadataStatus?: string;
   fieldSources: Record<string, string>;
 };
 
@@ -77,6 +80,7 @@ export type LibraryAlbum = {
   albumKey: string;
   title: string;
   albumArtist: string;
+  year: number | null;
   trackCount: number;
   duration: number;
   coverId: string | null;

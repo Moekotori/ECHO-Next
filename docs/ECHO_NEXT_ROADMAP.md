@@ -17,6 +17,8 @@ Phase 0 intentionally kept scanning, playback, and SQLite out of the shell.
 - local library folders
 - background scan jobs with status, phase, cancellation, progress, and errors
 - incremental scanning by `path + size_bytes + mtime_ms`
+- native-worker-ready `MetadataReader`, `CoverExtractor`, and `FileScanner` interfaces
+- first TS worker implementations that can later be replaced by Rust/C++ workers
 - embedded metadata reading with per-field source tracking
 - persisted cover cache files for thumb, large, and original
 - transaction-backed scan writes
@@ -36,6 +38,17 @@ Deferred beyond the minimal Phase 1 loop:
 - artist detail pages
 - full file management
 - lyrics, MV, streaming, and downloaders
+
+## Phase 1.5: Native Worker & Performance Validation
+
+- build a Rust `CoverWorker`
+- evaluate whether `MetadataWorker` should move to Rust/C++
+- pressure test 3000 and 10000 track libraries
+- record CPU, memory, total scan time, metadata time, cover time, and album wall load time
+- confirm unchanged scans approach 100% skip rate
+- decide from measurements whether `FileScanner` needs native implementation
+- keep Renderer, IPC, SQLite schema, and paginated APIs unchanged while swapping worker implementations
+- verify `getTracks` first page stays under the 200 ms target and `getAlbums` first page stays under the 300 ms target
 
 ## Phase 2: Audio Core
 

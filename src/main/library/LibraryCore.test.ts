@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createDatabase } from '../database/createDatabase';
 import { MetadataService } from './MetadataService';
 import { createLibraryService } from './LibraryService';
-import type { ParsedTrackMetadata, ScannedAudioFile } from './libraryTypes';
+import type { CoverExtractOptions, CoverResult, MetadataResult, ParsedTrackMetadata, ScannedAudioFile, ScannedFile } from './libraryTypes';
+import type { CoverExtractor } from './workers/CoverExtractor';
+import type { FileScanner } from './workers/FileScanner';
+import type { MetadataReader } from './workers/MetadataReader';
 
 const tempRoots: string[] = [];
 const cleanupCallbacks: Array<() => void> = [];
@@ -32,6 +35,7 @@ const baseMetadata = (overrides: Partial<ParsedTrackMetadata> = {}): ParsedTrack
   trackNo: 1,
   discNo: 1,
   year: 2024,
+  genre: 'Electronic',
   duration: 180,
   codec: 'FLAC',
   sampleRate: 96000,
@@ -45,6 +49,7 @@ const baseMetadata = (overrides: Partial<ParsedTrackMetadata> = {}): ParsedTrack
     trackNo: 'embedded',
     discNo: 'embedded',
     year: 'embedded',
+    genre: 'embedded',
     duration: 'technical',
     codec: 'technical',
     sampleRate: 'technical',
@@ -66,6 +71,80 @@ class MockMetadataService extends MetadataService {
     }
 
     return baseMetadata(this.overrides.get(file.path));
+  }
+}
+
+const metadataResult = (overrides: Partial<ParsedTrackMetadata> = {}, extras: Partial<MetadataResult> = {}): MetadataResult => {
+  const metadata = baseMetadata(overrides);
+
+  return {
+    fields: {
+      title: metadata.title,
+      artist: metadata.artist,
+      album: metadata.album,
+      albumArtist: metadata.albumArtist,
+      trackNo: metadata.trackNo,
+      discNo: metadata.discNo,
+      year: metadata.year,
+      genre: metadata.genre,
+      duration: metadata.duration,
+      codec: metadata.codec,
+      sampleRate: metadata.sampleRate,
+      bitDepth: metadata.bitDepth,
+      bitrate: metadata.bitrate,
+    },
+    fieldSources: metadata.fieldSources,
+    embeddedCover: metadata.embeddedCover,
+    warnings: [],
+    errors: [],
+    status: 'ok',
+    ...extras,
+  };
+};
+
+class FakeMetadataReader implements MetadataReader {
+  readonly calls: string[] = [];
+
+  constructor(private readonly result: MetadataResult = metadataResult()) {}
+
+  async read(filePath: string): Promise<MetadataResult> {
+    this.calls.push(filePath);
+    return this.result;
+  }
+}
+
+class FakeCoverExtractor implements CoverExtractor {
+  readonly calls: string[] = [];
+
+  constructor(private readonly result?: Partial<CoverResult>) {}
+
+  async extract(filePath: string, options: CoverExtractOptions): Promise<CoverResult> {
+    this.calls.push(filePath);
+    return {
+      source: 'default',
+      thumbPath: join(options.cacheRoot, 'fake-thumb.svg'),
+      largePath: join(options.cacheRoot, 'fake-large.svg'),
+      originalRef: join(options.cacheRoot, 'fake-original.svg'),
+      sourceHash: `fake-${this.calls.length}`,
+      mimeType: 'image/svg+xml',
+      warnings: [],
+      errors: [],
+      ...this.result,
+    };
+  }
+}
+
+class FakeFileScanner implements FileScanner {
+  readonly calls: string[] = [];
+
+  constructor(private readonly files: ScannedFile[]) {}
+
+  async *scanFolder(folderPath: string): AsyncIterable<ScannedFile> {
+    this.calls.push(folderPath);
+
+    for (const file of this.files) {
+      yield file;
+    }
   }
 }
 
@@ -138,8 +217,8 @@ describe('Library Core', () => {
     const root = makeTempRoot();
     const databasePath = join(root, 'library.sqlite');
     const database = createDatabase(databasePath);
-    const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
-    const indexes = database.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((row) => row.name);
+    const tables = database.prepare<unknown[], { name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
+    const indexes = database.prepare<unknown[], { name: string }>("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((row) => row.name);
 
     expect(tables).toEqual(expect.arrayContaining(['folders', 'tracks', 'albums', 'album_tracks', 'artists', 'covers', 'scan_jobs']));
     expect(indexes).toEqual(
@@ -151,15 +230,17 @@ describe('Library Core', () => {
         'idx_tracks_album',
         'idx_albums_album_key',
         'idx_album_tracks_album_id',
+        'idx_album_tracks_track_id',
         'idx_folders_path',
+        'idx_covers_id',
       ]),
     );
 
     database.close();
     const reopened = createDatabase(databasePath);
-    const migrationRows = reopened.prepare('SELECT id FROM schema_migrations ORDER BY id').all();
+    const migrationRows = reopened.prepare<unknown[], { id: number }>('SELECT id FROM schema_migrations ORDER BY id').all();
 
-    expect(migrationRows.map((row) => Number(row.id))).toEqual([1, 2]);
+    expect(migrationRows.map((row) => Number(row.id))).toEqual([1, 2, 3]);
     reopened.close();
   });
 
@@ -439,12 +520,140 @@ describe('Library Core', () => {
     const [track] = harness.service.getTracks({ pageSize: 1 }).items;
     harness.service.close();
     const database = createDatabase(harness.databasePath);
-    const cover = database.prepare('SELECT source_type, cover_thumb FROM covers WHERE id = ?').get(track.coverId);
+    const cover = database
+      .prepare<[string | null], { source_type: string; thumb_path: string | null }>('SELECT source_type, thumb_path FROM covers WHERE id = ?')
+      .get(track.coverId);
 
     expect(cover?.source_type).toBe('embedded');
-    expect(typeof cover?.cover_thumb).toBe('string');
+    expect(typeof cover?.thumb_path).toBe('string');
     expect(track.coverThumb).toContain('file://');
     database.close();
     harness.cleanup();
+  });
+
+  it('LibraryService can scan with fake worker interfaces instead of concrete TS workers', async () => {
+    const root = makeTempRoot();
+    const folder = join(root, 'music');
+    mkdirSync(folder, { recursive: true });
+    const filePath = writeAudioFile(folder, 'Fake Worker.flac');
+    const fileScanner = new FakeFileScanner([
+      {
+        path: filePath,
+        sizeBytes: 123,
+        mtimeMs: 456,
+      },
+    ]);
+    const metadataReader = new FakeMetadataReader(metadataResult({ title: 'Worker Title' }));
+    const coverExtractor = new FakeCoverExtractor();
+    const service = createLibraryService(join(root, 'library.sqlite'), {
+      fileScanner,
+      metadataReader,
+      coverExtractor,
+      coverCacheDir: join(root, 'cover-cache'),
+    });
+
+    const libraryFolder = service.addFolder(folder);
+    const job = service.scanFolder(libraryFolder.id);
+    await service.waitForScan(job.id);
+
+    const tracks = service.getTracks({ pageSize: 10 });
+    expect(fileScanner.calls).toEqual([folder]);
+    expect(metadataReader.calls).toEqual([filePath]);
+    expect(coverExtractor.calls).toEqual([filePath]);
+    expect(tracks.total).toBe(1);
+    expect(tracks.items[0].title).toBe('Worker Title');
+    service.close();
+  });
+
+  it('worker warnings and errors are collected without failing the scan', async () => {
+    const root = makeTempRoot();
+    const folder = join(root, 'music');
+    mkdirSync(folder, { recursive: true });
+    const filePath = writeAudioFile(folder, 'Noisy Worker.flac');
+    const metadataReader = new FakeMetadataReader(
+      metadataResult(
+        { title: 'Noisy Title' },
+        {
+          status: 'error',
+          warnings: ['metadata warning'],
+          errors: ['metadata fallback'],
+        },
+      ),
+    );
+    const coverExtractor = new FakeCoverExtractor({
+      warnings: ['cover warning'],
+      errors: ['cover fallback'],
+    });
+    const service = createLibraryService(join(root, 'library.sqlite'), {
+      fileScanner: new FakeFileScanner([
+        {
+          path: filePath,
+          sizeBytes: 123,
+          mtimeMs: 456,
+        },
+      ]),
+      metadataReader,
+      coverExtractor,
+      coverCacheDir: join(root, 'cover-cache'),
+    });
+
+    const libraryFolder = service.addFolder(folder);
+    const job = service.scanFolder(libraryFolder.id);
+    await service.waitForScan(job.id);
+    const status = service.getScanStatus(job.id);
+    const tracks = service.getTracks({ pageSize: 10 });
+
+    expect(status.status).toBe('completed');
+    expect(status.errorCount).toBe(4);
+    expect(status.errors.join('\n')).toContain('metadata warning');
+    expect(status.errors.join('\n')).toContain('metadata fallback');
+    expect(status.errors.join('\n')).toContain('cover warning');
+    expect(status.errors.join('\n')).toContain('cover fallback');
+    expect(tracks.total).toBe(1);
+    expect(tracks.items[0].metadataStatus).toBe('error');
+    service.close();
+  });
+
+  it('scan job can be cancelled while worker work is in flight', async () => {
+    const root = makeTempRoot();
+    const folder = join(root, 'music');
+    mkdirSync(folder, { recursive: true });
+    const filePath = writeAudioFile(folder, 'Slow Worker.flac');
+    let resolveStarted: () => void = () => undefined;
+    let releaseRead: () => void = () => undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const metadataReader: MetadataReader = {
+      async read() {
+        resolveStarted();
+        await new Promise<void>((resolveRead) => {
+          releaseRead = resolveRead;
+        });
+        return metadataResult();
+      },
+    };
+    const service = createLibraryService(join(root, 'library.sqlite'), {
+      fileScanner: new FakeFileScanner([
+        {
+          path: filePath,
+          sizeBytes: 123,
+          mtimeMs: 456,
+        },
+      ]),
+      metadataReader,
+      coverExtractor: new FakeCoverExtractor(),
+      coverCacheDir: join(root, 'cover-cache'),
+    });
+    const libraryFolder = service.addFolder(folder);
+    const job = service.scanFolder(libraryFolder.id);
+
+    await readStarted;
+    const cancelling = service.cancelScan(job.id);
+    expect(cancelling.status).toBe('running');
+    releaseRead();
+    await service.waitForScan(job.id);
+    expect(service.getScanStatus(job.id).status).toBe('cancelled');
+    service.close();
   });
 });

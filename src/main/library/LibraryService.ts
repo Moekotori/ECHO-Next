@@ -3,11 +3,10 @@ import { dirname, join, resolve } from 'node:path';
 import electron from 'electron';
 import { createDatabase } from '../database/createDatabase';
 import { AlbumService } from './AlbumService';
-import { CoverService } from './CoverService';
-import { LibraryScanner } from './LibraryScanner';
 import { LibraryStore } from './LibraryStore';
-import { MetadataService } from './MetadataService';
+import { inflateMetadataResult } from './MetadataService';
 import { ScanJobQueue } from './ScanJobQueue';
+import type { MetadataService } from './MetadataService';
 import type {
   LibraryAlbum,
   LibraryFolder,
@@ -17,11 +16,21 @@ import type {
   LibrarySummary,
   LibraryTrack,
 } from './libraryTypes';
+import type { CoverExtractor } from './workers/CoverExtractor';
+import type { FileScanner } from './workers/FileScanner';
+import type { MetadataReader } from './workers/MetadataReader';
+import { TsCoverExtractor } from './workers/TsCoverExtractor';
+import { TsFileScanner } from './workers/TsFileScanner';
+import { TsMetadataReader } from './workers/TsMetadataReader';
 
 type LibraryServiceDependencies = {
-  scanner?: LibraryScanner;
+  fileScanner?: FileScanner;
+  metadataReader?: MetadataReader;
+  coverExtractor?: CoverExtractor;
   metadataService?: MetadataService;
   coverCacheDir?: string;
+  metadataConcurrency?: number;
+  coverConcurrency?: number;
 };
 
 export class LibraryService {
@@ -99,14 +108,30 @@ export const createLibraryService = (
 ): LibraryService => {
   const database = createDatabase(databasePath);
   const store = new LibraryStore(database);
-  const scanner = dependencies.scanner ?? new LibraryScanner();
-  const metadataService = dependencies.metadataService ?? new MetadataService();
-  const coverService = new CoverService(
-    database,
-    dependencies.coverCacheDir ?? join(dirname(databasePath), 'cover-cache'),
-  );
+  const fileScanner = dependencies.fileScanner ?? new TsFileScanner();
+  const metadataReader =
+    dependencies.metadataReader ??
+    (dependencies.metadataService
+      ? {
+          read: async (filePath: string) =>
+            inflateMetadataResult(
+              await dependencies.metadataService!.read({
+                path: filePath,
+                folderId: '',
+                sizeBytes: 0,
+                mtimeMs: 0,
+              }),
+            ),
+        }
+      : new TsMetadataReader());
+  const coverExtractor = dependencies.coverExtractor ?? new TsCoverExtractor();
+  const coverCacheDir = dependencies.coverCacheDir ?? join(dirname(databasePath), 'cover-cache');
   const albumService = new AlbumService();
-  const scanJobQueue = new ScanJobQueue(store, scanner, metadataService, coverService, albumService);
+  const scanJobQueue = new ScanJobQueue(store, fileScanner, metadataReader, coverExtractor, albumService, {
+    coverCacheDir,
+    metadataConcurrency: dependencies.metadataConcurrency,
+    coverConcurrency: dependencies.coverConcurrency,
+  });
 
   return new LibraryService(store, scanJobQueue, () => database.close());
 };

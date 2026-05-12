@@ -39,6 +39,7 @@ The renderer must not:
 - hold the whole library in React state
 - run heavy search over a full in-memory track array
 - let high-frequency playback state rerender the entire app
+- know whether library workers are TypeScript, Rust, or C++
 
 Songs, albums, artists, and search results must be paged or virtualized.
 
@@ -62,6 +63,25 @@ Preload must not:
 - access files directly
 - implement business logic
 - parse metadata or covers
+- know which worker implementation backs Library Core
+
+## Native Worker Boundary
+
+Library Core heavy work must be called through stable interfaces:
+
+- `MetadataReader`
+- `CoverExtractor`
+- `FileScanner`
+
+`LibraryService` may compose concrete defaults, but orchestration must depend on the interfaces. IPC and Renderer must never import `TsMetadataReader`, `TsCoverExtractor`, or `TsFileScanner`.
+
+Future Rust/C++ workers must preserve the same return shapes:
+
+- metadata fields, field sources, warnings, errors, and status
+- cover source, thumb path, large path, original reference, warnings, and errors
+- scanned file path, size, and mtime
+
+SQLite schema, IPC payloads, and Renderer list views must not change just because a worker implementation changes.
 
 ## Metadata Priority
 
@@ -135,7 +155,7 @@ Local library scans must skip metadata parsing when `path + size_bytes + mtime_m
 
 Scan jobs must report one of these phases:
 
-- `discovering_files`
+- `discovering`
 - `checking_cache`
 - `reading_metadata`
 - `extracting_covers`
@@ -146,6 +166,8 @@ Scan jobs must report one of these phases:
 - `cancelled`
 
 Per-file metadata or cover errors must be collected without failing the entire scan.
+
+Metadata and cover workers must use concurrency limits. Cover thumbnails must be created during scans, not during list scrolling.
 
 ## Library Persistence
 
@@ -163,7 +185,9 @@ Required persisted tables:
 
 Album wall views must read the `albums` table. They must not regroup the full track table in the renderer.
 
-If a file is removed from a scanned folder, the next scan removes its track row. Disk files must never be deleted by Library Core.
+If a file is removed from a scanned folder, the next scan must hide it from list APIs without touching the disk file.
+
+Current v0.1 policy: missing files are marked `missing = 1` and filtered out of list APIs. This keeps cache history without deleting the user's disk files.
 
 ## Album Grouping
 
@@ -182,3 +206,5 @@ Rules:
 Changes touching metadata, cover, audio, library, encoding, database migration, or file scanning behavior must include focused tests.
 
 Library Core tests should prefer real SQLite and mocked metadata readers over large binary audio fixtures unless a parser integration bug specifically requires real media.
+
+Tests that touch Library Core must cover the worker boundary with fake `MetadataReader`, `CoverExtractor`, and `FileScanner` implementations so the architecture stays Rust/C++ ready.
