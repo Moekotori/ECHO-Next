@@ -24,6 +24,9 @@ export type AudioStatus = {
   host: 'not-initialized' | 'starting' | 'ready' | 'unavailable' | 'error';
   state: AudioPlaybackState;
   outputDeviceId: string | null;
+  outputDeviceName: string | null;
+  outputDeviceType: string | null;
+  outputBackend: string | null;
   outputMode: AudioOutputMode;
   currentFilePath: string | null;
   currentTrackId: string | null;

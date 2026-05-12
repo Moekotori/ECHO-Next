@@ -51,6 +51,8 @@ const defaultLogger = (message: string): void => {
   console.warn(message);
 };
 
+const slowNativeModeReadyTimeoutMs = 45_000;
+
 const appendTailLine = (lines: string[], line: string): void => {
   const trimmed = line.trim();
 
@@ -306,13 +308,17 @@ export class NativeOutputBridge extends EventEmitter {
       });
 
       this.clearReadyTimer();
+      const readyTimeoutMs =
+        options.exclusive || options.asio
+          ? Math.max(this.readyTimeoutMs, slowNativeModeReadyTimeoutMs)
+          : this.readyTimeoutMs;
       this.readyTimer = setTimeout(() => {
         this.readyTimer = null;
         if (!this.ready) {
           this.stop();
           settleReject(createHostError('timeout_waiting_for_ready', bin, args, stderrLines));
         }
-      }, this.readyTimeoutMs);
+      }, readyTimeoutMs);
     });
   }
 

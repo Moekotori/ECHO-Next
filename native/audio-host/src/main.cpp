@@ -54,6 +54,13 @@ struct DeviceDescriptor
     bool isAsio = false;
 };
 
+enum class DeviceListMode
+{
+    Shared,
+    Exclusive,
+    Asio,
+};
+
 void logLine(const std::string& message)
 {
     std::cerr << "[echo-audio-host] " << message << std::endl;
@@ -194,10 +201,16 @@ bool isAsioType(const juce::String& typeName)
     return typeName.containsIgnoreCase("asio");
 }
 
+bool isExclusiveType(const juce::String& typeName)
+{
+    return typeName.containsIgnoreCase("exclusive");
+}
+
 bool isPreferredSharedType(const juce::String& typeName)
 {
-    return typeName.containsIgnoreCase("windows audio")
-        || typeName.containsIgnoreCase("wasapi");
+    return ! isExclusiveType(typeName)
+        && (typeName.containsIgnoreCase("windows audio")
+            || typeName.containsIgnoreCase("wasapi"));
 }
 
 int sharedTypePriority(const juce::String& typeName)
@@ -212,6 +225,45 @@ int sharedTypePriority(const juce::String& typeName)
         return 2;
 
     return 3;
+}
+
+bool shouldIncludeType(const juce::String& typeName, DeviceListMode mode)
+{
+    const bool asioType = isAsioType(typeName);
+    const bool exclusiveType = isExclusiveType(typeName);
+
+    if (mode == DeviceListMode::Asio)
+        return asioType;
+
+    if (asioType)
+        return false;
+
+    if (mode == DeviceListMode::Exclusive)
+        return exclusiveType;
+
+    return ! exclusiveType;
+}
+
+DeviceListMode getHostOutputMode(const Options& options)
+{
+    if (options.asio)
+        return DeviceListMode::Asio;
+
+    if (options.exclusive)
+        return DeviceListMode::Exclusive;
+
+    return DeviceListMode::Shared;
+}
+
+std::string getBackendName(const Options& options, const juce::String& typeName)
+{
+    if (options.asio || isAsioType(typeName))
+        return "asio";
+
+    if (options.exclusive || isExclusiveType(typeName))
+        return "wasapi-exclusive";
+
+    return "wasapi-shared";
 }
 
 int pickRate(const juce::Array<double>& rates, bool maxRate)
@@ -238,7 +290,7 @@ void createDeviceTypes(juce::OwnedArray<juce::AudioIODeviceType>& types)
     manager.createAudioDeviceTypes(types);
 }
 
-std::vector<DeviceDescriptor> enumerateDevices(bool asioOnly, bool dedupe = true)
+std::vector<DeviceDescriptor> enumerateDevices(DeviceListMode mode, bool dedupe = true)
 {
     juce::OwnedArray<juce::AudioIODeviceType> types;
     createDeviceTypes(types);
@@ -250,11 +302,10 @@ std::vector<DeviceDescriptor> enumerateDevices(bool asioOnly, bool dedupe = true
         if (type == nullptr)
             continue;
 
-        const bool typeIsAsio = isAsioType(type->getTypeName());
-        if (asioOnly != typeIsAsio)
+        if (! shouldIncludeType(type->getTypeName(), mode))
             continue;
 
-        if (dedupe && ! asioOnly && ! isPreferredSharedType(type->getTypeName()))
+        if (dedupe && mode == DeviceListMode::Shared && ! isPreferredSharedType(type->getTypeName()))
             continue;
 
         candidateTypes.push_back(type);
@@ -267,8 +318,7 @@ std::vector<DeviceDescriptor> enumerateDevices(bool asioOnly, bool dedupe = true
             if (type == nullptr)
                 continue;
 
-            const bool typeIsAsio = isAsioType(type->getTypeName());
-            if (asioOnly == typeIsAsio)
+            if (shouldIncludeType(type->getTypeName(), mode))
                 candidateTypes.push_back(type);
         }
     }
@@ -291,7 +341,7 @@ std::vector<DeviceDescriptor> enumerateDevices(bool asioOnly, bool dedupe = true
         for (int i = 0; i < names.size(); ++i)
         {
             const auto dedupeKey = names[i].toStdString();
-            if (dedupe && ! asioOnly && seenDeviceNames.find(dedupeKey) != seenDeviceNames.end())
+            if (dedupe && mode != DeviceListMode::Asio && seenDeviceNames.find(dedupeKey) != seenDeviceNames.end())
                 continue;
 
             seenDeviceNames.insert(dedupeKey);
@@ -312,7 +362,7 @@ std::vector<DeviceDescriptor> enumerateDevices(bool asioOnly, bool dedupe = true
 
 void listDevices(bool asioOnly)
 {
-    const auto devices = enumerateDevices(asioOnly);
+    const auto devices = enumerateDevices(asioOnly ? DeviceListMode::Asio : DeviceListMode::Shared);
 
     for (const auto& device : devices)
     {
@@ -345,7 +395,7 @@ bool isLooseDeviceNameMatch(const juce::String& left, const juce::String& right)
 
 DeviceDescriptor selectDevice(const Options& options)
 {
-    const auto devices = enumerateDevices(options.asio);
+    const auto devices = enumerateDevices(options.asio ? DeviceListMode::Asio : DeviceListMode::Shared);
 
     if (devices.empty())
         throw std::runtime_error("no output devices available");
@@ -399,9 +449,12 @@ std::vector<DeviceDescriptor> buildOpenCandidates(const Options& options, const 
         candidates.push_back(device);
     };
 
-    addCandidate(selected);
+    const auto outputMode = getHostOutputMode(options);
 
-    const auto allDevices = enumerateDevices(options.asio, false);
+    if (shouldIncludeType(selected.typeName, outputMode))
+        addCandidate(selected);
+
+    const auto allDevices = enumerateDevices(outputMode, false);
 
     for (const auto& device : allDevices)
     {
@@ -605,10 +658,14 @@ std::vector<int> buildSampleRateAttempts(const Options& options, const DeviceDes
     };
 
     add(options.sampleRate);
-    add(device.sharedSampleRate);
-    add(48000);
-    add(44100);
-    add(device.sampleRate);
+
+    if (! options.exclusive && ! options.asio)
+    {
+        add(device.sharedSampleRate);
+        add(48000);
+        add(44100);
+        add(device.sampleRate);
+    }
 
     return rates;
 }
@@ -641,6 +698,16 @@ std::unique_ptr<juce::AudioIODevice> openDevice(
         if (lastError.isEmpty())
         {
             actualSampleRate = static_cast<int>(std::round(device->getCurrentSampleRate()));
+            if ((options.exclusive || options.asio) && actualSampleRate != options.sampleRate)
+            {
+                device->close();
+                throw std::runtime_error(
+                    "output sample rate mismatch: requested "
+                    + std::to_string(options.sampleRate)
+                    + " Hz, opened "
+                    + std::to_string(actualSampleRate)
+                    + " Hz");
+            }
             return device;
         }
 
@@ -705,10 +772,10 @@ std::unique_ptr<juce::AudioIODevice> openSelectedDevice(
 int runHost(const Options& options)
 {
     if (options.exclusive)
-        logLine("WASAPI exclusive is accepted by CLI but v1 opens JUCE shared output");
+        logLine("WASAPI exclusive requested; shared fallback is disabled");
 
     if (options.asio)
-        logLine("ASIO is accepted by CLI but v1 shared playback is the acceptance path");
+        logLine("ASIO requested; shared fallback is disabled");
 
     const auto descriptor = selectDevice(options);
     logLine("Using device index " + std::to_string(descriptor.index) + ": " + descriptor.name.toStdString());
@@ -732,7 +799,9 @@ int runHost(const Options& options)
         std::string("{\"ready\":true,\"sampleRate\":") + std::to_string(actualSampleRate)
         + ",\"hardwareSampleRate\":" + std::to_string(actualSampleRate)
         + ",\"channels\":" + std::to_string(options.channels)
-        + ",\"exclusive\":false,\"backend\":\"juce\",\"deviceType\":\""
+        + ",\"exclusive\":" + std::string(options.exclusive ? "true" : "false")
+        + ",\"backend\":\"" + getBackendName(options, openedDescriptor.typeName)
+        + "\",\"deviceType\":\""
         + jsonEscape(openedDescriptor.typeName) + "\",\"deviceName\":\""
         + jsonEscape(openedDescriptor.name) + "\"}");
 

@@ -77,18 +77,29 @@ const createProbeFromHint = (filePath: string, hint: AudioSessionPlayRequest['pr
   };
 };
 
+const createProbeHint = (probe: AudioProbeResult): AudioSessionPlayRequest['probe'] => ({
+  durationSeconds: probe.durationSeconds,
+  fileSampleRate: probe.fileSampleRate,
+  channels: probe.channels,
+  codec: probe.codec,
+  bitDepth: probe.bitDepth,
+  bitrate: probe.bitrate,
+});
+
 const createDeviceFromOutputSettings = (settings: AudioOutputSettings): AudioDeviceInfo | null => {
   if (!hasExplicitDeviceSelection(settings)) {
     return null;
   }
 
   const outputMode = normalizeOutputMode(settings.outputMode);
+  const outputModeKey = outputMode === 'asio' ? 'asio' : 'shared';
+  const deviceIndex = Number.isInteger(Number(settings.deviceIndex)) ? Number(settings.deviceIndex) : -1;
 
   return {
-    id: `${outputMode === 'asio' ? 'asio' : 'shared'}:${settings.deviceName ?? settings.deviceIndex ?? 'selected'}`,
-    index: Number.isInteger(Number(settings.deviceIndex)) ? Number(settings.deviceIndex) : -1,
+    id: deviceIndex >= 0 ? `${outputModeKey}:${deviceIndex}` : `${outputModeKey}:${settings.deviceName ?? 'selected'}`,
+    index: deviceIndex,
     name: settings.deviceName ?? 'Selected output',
-    outputMode: outputMode === 'asio' ? 'asio' : 'shared',
+    outputMode: outputModeKey,
     sampleRate: normalizePositiveInteger(settings.requestedOutputSampleRate),
     sharedDeviceSampleRate: null,
     isDefault: false,
@@ -99,6 +110,9 @@ const defaultStatus = (nativeHostAvailable: boolean): AudioStatus => ({
   host: nativeHostAvailable ? 'not-initialized' : 'unavailable',
   state: 'idle',
   outputDeviceId: null,
+  outputDeviceName: null,
+  outputDeviceType: null,
+  outputBackend: null,
   outputMode: 'shared',
   currentFilePath: null,
   currentTrackId: null,
@@ -139,6 +153,9 @@ export class AudioSession extends EventEmitter {
   private currentOutputSettings: AudioOutputSettings | null = null;
   private currentPlan: SampleRatePlan | null = null;
   private currentDevice: AudioDeviceInfo | null = null;
+  private currentOutputBackend: string | null = null;
+  private currentOutputDeviceType: string | null = null;
+  private currentOutputDeviceName: string | null = null;
   private bridge: OutputBridgeLike | null = null;
   private decoderRun: DecoderRun | null = null;
   private errorMessage: string | null = null;
@@ -160,14 +177,40 @@ export class AudioSession extends EventEmitter {
     return this.deviceService.listDevices();
   }
 
-  setOutput(settings: AudioOutputSettings): AudioStatus {
+  async setOutput(settings: AudioOutputSettings): Promise<AudioStatus> {
+    this.updatePositionFromOutput();
     this.outputSettings = {
       ...this.outputSettings,
       ...settings,
       outputMode: normalizeOutputMode(settings.outputMode ?? this.outputSettings.outputMode),
       volume: Math.max(0, Math.min(1, Number(settings.volume ?? this.outputSettings.volume) || 0)),
     };
-    this.currentDevice = this.resolveSelectedDevice(this.outputSettings);
+
+    if (this.currentOutputSettings) {
+      this.currentOutputSettings = {
+        ...this.currentOutputSettings,
+        ...this.outputSettings,
+      };
+    }
+
+    this.currentDevice = createDeviceFromOutputSettings(this.currentOutputSettings ?? this.outputSettings);
+
+    if (this.state === 'paused') {
+      this.emitStatus();
+      return this.getStatus();
+    }
+
+    if (this.state === 'playing' && this.currentFilePath && this.currentProbe && this.currentOutputSettings) {
+      const positionSeconds = this.clock.getPositionSeconds();
+      return this.playLocalFile({
+        filePath: this.currentFilePath,
+        trackId: this.currentTrackId ?? undefined,
+        startSeconds: positionSeconds,
+        output: this.currentOutputSettings,
+        probe: createProbeHint(this.currentProbe),
+      });
+    }
+
     this.emitStatus();
     return this.getStatus();
   }
@@ -190,6 +233,9 @@ export class AudioSession extends EventEmitter {
     this.pausedPositionSeconds = null;
     this.currentProbe = null;
     this.currentPlan = null;
+    this.currentOutputBackend = null;
+    this.currentOutputDeviceType = null;
+    this.currentOutputDeviceName = null;
     this.currentOutputSettings = {
       ...this.outputSettings,
       ...request.output,
@@ -210,6 +256,7 @@ export class AudioSession extends EventEmitter {
       const { bridge, plan, ready } = await this.startOutputBridgeForProbe(probe, token, request.startSeconds ?? 0);
       this.assertCurrentRun(token);
       this.applyReadyResult(ready);
+      this.assertReadySampleRateConsistent();
       this.logger(
         `[AudioSession] host ready: requested=${ready.requestedOutputSampleRate} actual=${
           ready.actualDeviceSampleRate ?? 'n/a'
@@ -289,6 +336,9 @@ export class AudioSession extends EventEmitter {
     this.currentFilePath = null;
     this.currentPlan = null;
     this.currentDevice = null;
+    this.currentOutputBackend = null;
+    this.currentOutputDeviceType = null;
+    this.currentOutputDeviceName = null;
     this.pausedPositionSeconds = null;
     this.errorMessage = null;
     this.clock.reset(0, null);
@@ -335,6 +385,9 @@ export class AudioSession extends EventEmitter {
       host: this.hostStatus,
       state: this.state,
       outputDeviceId: this.currentDevice?.id ?? null,
+      outputDeviceName: this.currentOutputDeviceName ?? this.currentDevice?.name ?? null,
+      outputDeviceType: this.currentOutputDeviceType,
+      outputBackend: this.currentOutputBackend,
       outputMode: plan?.outputMode ?? this.outputSettings.outputMode,
       currentFilePath: this.currentFilePath,
       currentTrackId: this.currentTrackId,
@@ -373,7 +426,10 @@ export class AudioSession extends EventEmitter {
       outputMode === 'shared'
         ? explicitRequestedSampleRate ?? sharedDeviceSampleRate ?? sourceSampleRate
         : explicitRequestedSampleRate ?? sourceSampleRate;
-    const decoderOutputSampleRate = actualDeviceSampleRate ?? requestedOutputSampleRate;
+    const decoderOutputSampleRate =
+      outputMode === 'shared'
+        ? actualDeviceSampleRate ?? requestedOutputSampleRate
+        : requestedOutputSampleRate;
     const warnings: string[] = [];
 
     if (!fileSampleRate) {
@@ -434,6 +490,9 @@ export class AudioSession extends EventEmitter {
     }
 
     const readyDevice = ready.device;
+    this.currentOutputBackend = typeof readyDevice.backend === 'string' ? readyDevice.backend : null;
+    this.currentOutputDeviceType = typeof readyDevice.deviceType === 'string' ? readyDevice.deviceType : null;
+    this.currentOutputDeviceName = typeof readyDevice.deviceName === 'string' ? readyDevice.deviceName : null;
     const readySharedRate =
       normalizePositiveInteger(readyDevice.sharedDeviceSampleRate) ??
       normalizePositiveInteger(readyDevice.sharedSampleRate);
@@ -481,6 +540,20 @@ export class AudioSession extends EventEmitter {
       ready.actualDeviceSampleRate,
     );
     this.clock.setSampleRate(ready.actualDeviceSampleRate ?? this.currentPlan.requestedOutputSampleRate);
+  }
+
+  private assertReadySampleRateConsistent(): void {
+    const plan = this.currentPlan;
+
+    if (!plan || plan.outputMode === 'shared' || plan.actualDeviceSampleRate === null) {
+      return;
+    }
+
+    if (plan.actualDeviceSampleRate !== plan.requestedOutputSampleRate) {
+      throw new Error(
+        `${plan.outputMode}_output_sample_rate_mismatch:${plan.requestedOutputSampleRate}->${plan.actualDeviceSampleRate}`,
+      );
+    }
   }
 
   private resolveSelectedDevice(outputSettings: AudioOutputSettings): AudioDeviceInfo | null {

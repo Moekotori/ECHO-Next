@@ -35,6 +35,7 @@ target_compile_definitions(echo-audio-host
     JUCE_REPORT_APP_USAGE=0
     JUCE_USE_CURL=0
     JUCE_WEB_BROWSER=0
+    JUCE_ASIO=1
 )
 
 target_link_libraries(echo-audio-host

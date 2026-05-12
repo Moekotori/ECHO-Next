@@ -95,6 +95,8 @@ export const PlayerBar = (): JSX.Element => {
       ['fileSampleRate', formatRate(audioStatus?.fileSampleRate ?? null)],
       ['actualDeviceSampleRate', formatRate(audioStatus?.actualDeviceSampleRate ?? null)],
       ['outputMode', audioStatus?.outputMode ?? 'shared'],
+      ['backend', audioStatus?.outputBackend ?? 'n/a'],
+      ['deviceType', audioStatus?.outputDeviceType ?? 'n/a'],
       ['sampleRateMismatch', audioStatus?.sampleRateMismatch ? 'warning' : 'ok'],
     ],
     [audioStatus, state],

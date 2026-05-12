@@ -76,6 +76,9 @@ export type NativeBridgeReadyMessage = Record<string, unknown> & {
   sharedDeviceSampleRate?: number;
   hardwareSampleRate?: number;
   exclusive?: boolean;
+  backend?: string;
+  deviceType?: string;
+  deviceName?: string;
 };
 
 export type NativeBridgeReadyResult = {

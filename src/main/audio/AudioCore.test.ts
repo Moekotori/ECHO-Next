@@ -31,10 +31,12 @@ const probe = (filePath: string, fileSampleRate: number): AudioProbeResult => ({
 
 class FakeDecoder {
   readonly decodeRequests: PcmDecodeRequest[] = [];
+  readonly probeRequests: string[] = [];
 
   constructor(private readonly probes: Map<string, AudioProbeResult>) {}
 
   async probeLocalFile(filePath: string): Promise<AudioProbeResult> {
+    this.probeRequests.push(filePath);
     const result = this.probes.get(filePath);
 
     if (!result) {
@@ -103,6 +105,9 @@ class FakeBridge extends EventEmitter {
       device: {
         ready: true,
         sampleRate: actualDeviceSampleRate,
+        backend: options.asio ? 'asio' : options.exclusive ? 'wasapi-exclusive' : 'wasapi-shared',
+        deviceType: options.asio ? 'ASIO' : options.exclusive ? 'Windows Audio (Exclusive Mode)' : 'Windows Audio (Shared Mode)',
+        deviceName: options.deviceName ?? 'Default output',
       },
       requestedOutputSampleRate: options.requestedOutputSampleRate,
       actualDeviceSampleRate,
@@ -323,19 +328,25 @@ describe('Audio Core sample-rate regression guard', () => {
     });
   });
 
-  it('ready sample-rate mismatch preserves requested rate and exposes a warning', async () => {
+  it('exclusive ready sample-rate mismatch fails before decoder resampling can start', async () => {
     const { decoder, session } = createSessionHarness([probe('441.flac', 44100)], [48000]);
 
-    const status = await session.playLocalFile({
-      filePath: '441.flac',
-      output: { outputMode: 'exclusive' },
-    });
+    await expect(
+      session.playLocalFile({
+        filePath: '441.flac',
+        output: { outputMode: 'exclusive' },
+      }),
+    ).rejects.toThrow('exclusive_output_sample_rate_mismatch:44100->48000');
+
+    const status = session.getStatus();
 
     expect(status.requestedOutputSampleRate).toBe(44100);
+    expect(status.decoderOutputSampleRate).toBe(44100);
     expect(status.actualDeviceSampleRate).toBe(48000);
     expect(status.sampleRateMismatch).toBe(true);
     expect(status.warnings).toContain('actual_device_sample_rate_mismatch:44100->48000');
-    expect(decoder.decodeRequests[0].decoderOutputSampleRate).toBe(48000);
+    expect(status.error).toBe('exclusive_output_sample_rate_mismatch:44100->48000');
+    expect(decoder.decodeRequests).toHaveLength(0);
   });
 
   it('pause stops the active native host and preserves the current position', async () => {
@@ -378,6 +389,60 @@ describe('Audio Core sample-rate regression guard', () => {
     await session.play();
     expect(bridges).toHaveLength(2);
     expect(bridges[1].startOptions?.startSeconds).toBe(33);
+  });
+
+  it('switching output while playing restarts the current file on the new device', async () => {
+    const { bridges, decoder, session } = createSessionHarness([probe('song.flac', 44100)]);
+
+    await session.playLocalFile({
+      filePath: 'song.flac',
+      output: { outputMode: 'shared', deviceIndex: 0, deviceName: 'TEAC USB AUDIO DEVICE' },
+    });
+    bridges[0].positionSeconds = 21.75;
+    const status = await session.setOutput({
+      outputMode: 'shared',
+      deviceIndex: 5,
+      deviceName: 'Mi Monitor (NVIDIA High Definition Audio)',
+    });
+
+    expect(status.state).toBe('playing');
+    expect(status.outputDeviceId).toBe('shared:5');
+    expect(bridges[0].stop).toHaveBeenCalledTimes(1);
+    expect(bridges).toHaveLength(2);
+    expect(bridges[1].startOptions).toMatchObject({
+      startSeconds: 21.75,
+      deviceIndex: 5,
+      deviceName: 'Mi Monitor (NVIDIA High Definition Audio)',
+    });
+    expect(decoder.probeRequests).toEqual(['song.flac']);
+  });
+
+  it('switching output while paused updates the resume target without starting playback', async () => {
+    const { bridges, session } = createSessionHarness([probe('song.flac', 44100)]);
+
+    await session.playLocalFile({
+      filePath: 'song.flac',
+      output: { outputMode: 'shared', deviceIndex: 0, deviceName: 'TEAC USB AUDIO DEVICE' },
+    });
+    bridges[0].positionSeconds = 9;
+    session.pause();
+    const pausedStatus = await session.setOutput({
+      outputMode: 'shared',
+      deviceIndex: 5,
+      deviceName: 'Mi Monitor (NVIDIA High Definition Audio)',
+    });
+
+    expect(pausedStatus.state).toBe('paused');
+    expect(pausedStatus.outputDeviceId).toBe('shared:5');
+    expect(bridges).toHaveLength(1);
+
+    await session.play();
+    expect(bridges).toHaveLength(2);
+    expect(bridges[1].startOptions).toMatchObject({
+      startSeconds: 9,
+      deviceIndex: 5,
+      deviceName: 'Mi Monitor (NVIDIA High Definition Audio)',
+    });
   });
 });
 
@@ -486,6 +551,80 @@ describe('NativeOutputBridge host arguments', () => {
     expect(spawned[0].args).toEqual(
       expect.arrayContaining(['-device', 'TEAC USB AUDIO DEVICE', '-device-index', '6']),
     );
+  });
+
+  it('spawns echo-audio-host with -asio and without -exclusive for ASIO output', async () => {
+    const spawned: Array<{ file: string; args: string[] }> = [];
+    const fakeSpawn = (file: string, args: string[]): ChildProcessWithoutNullStreams => {
+      spawned.push({ file, args });
+      const stdin = new PassThrough();
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const child = Object.assign(new EventEmitter(), {
+        stdin,
+        stdout,
+        stderr,
+        kill: vi.fn(() => true),
+      }) as unknown as ChildProcessWithoutNullStreams;
+
+      queueMicrotask(() => {
+        stdout.write('{"ready":true,"sampleRate":96000,"backend":"asio","deviceType":"ASIO","deviceName":"TEAC ASIO"}\n');
+      });
+
+      return child;
+    };
+    const bridge = new NativeOutputBridge({
+      hostBinary: 'echo-audio-host.exe',
+      spawn: fakeSpawn as HostSpawner,
+      logger: noopLogger,
+    });
+
+    await bridge.start({
+      requestedOutputSampleRate: 96000,
+      channels: 2,
+      asio: true,
+      exclusive: true,
+    });
+
+    expect(spawned[0].args).toEqual(expect.arrayContaining(['-sr', '96000', '-ch', '2', '-asio']));
+    expect(spawned[0].args).not.toContain('-exclusive');
+  });
+
+  it('allows slow Exclusive host startup to outlive the shared-mode ready timeout', async () => {
+    const fakeSpawn = (): ChildProcessWithoutNullStreams => {
+      const stdin = new PassThrough();
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const child = Object.assign(new EventEmitter(), {
+        stdin,
+        stdout,
+        stderr,
+        kill: vi.fn(() => true),
+      }) as unknown as ChildProcessWithoutNullStreams;
+
+      setTimeout(() => {
+        stdout.write(
+          '{"ready":true,"sampleRate":192000,"backend":"wasapi-exclusive","deviceType":"Windows Audio (Exclusive Mode)","deviceName":"TEAC"}\n',
+        );
+      }, 20);
+
+      return child;
+    };
+    const bridge = new NativeOutputBridge({
+      hostBinary: 'echo-audio-host.exe',
+      spawn: fakeSpawn as HostSpawner,
+      readyTimeoutMs: 5,
+      logger: noopLogger,
+    });
+
+    const ready = await bridge.start({
+      requestedOutputSampleRate: 192000,
+      channels: 2,
+      exclusive: true,
+    });
+
+    expect(ready.actualDeviceSampleRate).toBe(192000);
+    bridge.stop();
   });
 });
 

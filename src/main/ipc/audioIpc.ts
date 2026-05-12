@@ -43,7 +43,7 @@ const normalizeOutputSettings = (value: unknown): AudioOutputSettings => {
 export const registerAudioIpc = (): void => {
   ipcMain.handle(IpcChannels.AudioGetStatus, (): AudioStatus => getAudioSession().getStatus());
   ipcMain.handle(IpcChannels.AudioListDevices, () => getAudioSession().listDevices());
-  ipcMain.handle(IpcChannels.AudioSetOutput, (_event, settings: unknown): AudioStatus =>
+  ipcMain.handle(IpcChannels.AudioSetOutput, async (_event, settings: unknown): Promise<AudioStatus> =>
     getAudioSession().setOutput(normalizeOutputSettings(settings)),
   );
 };
