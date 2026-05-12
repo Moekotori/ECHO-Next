@@ -1,5 +1,6 @@
 import type { NetworkMetadataProvider } from '../NetworkMetadataProvider';
 import type { NetworkMetadataCandidateInput, NetworkTrackLookup } from '../networkTypes';
+import { buildSearchQuery } from './providerFetch';
 
 const withTimeout = async (url: string, signal: AbortSignal | undefined): Promise<unknown> => {
   const controller = new AbortController();
@@ -33,12 +34,27 @@ const number = (value: unknown): number | null => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
+const isUnknownArtist = (value: string): boolean => {
+  const normalized = value.trim().toLocaleLowerCase();
+  return !normalized || normalized === 'unknown artist' || normalized === 'unknown';
+};
 
 export class MusicBrainzProvider implements NetworkMetadataProvider {
   readonly name = 'musicbrainz' as const;
 
   async findMetadata(track: NetworkTrackLookup, signal?: AbortSignal): Promise<NetworkMetadataCandidateInput[]> {
-    const query = encodeURIComponent(`recording:"${track.title}" AND artist:"${track.artist}"`);
+    const title = track.title && track.title !== 'Untitled' ? track.title : track.filename.replace(/\.[^.]+$/, '');
+    const searchText =
+      title && !isUnknownArtist(track.artist)
+        ? `recording:"${title}" AND artist:"${track.artist}"`
+        : title
+          ? `recording:"${title}"`
+          : buildSearchQuery(track.title, track.artist, track.filename);
+    if (!searchText) {
+      return [];
+    }
+
+    const query = encodeURIComponent(searchText);
     const data = asRecord(await withTimeout(`https://musicbrainz.org/ws/2/recording/?query=${query}&fmt=json&limit=5`, signal));
     const recordings = Array.isArray(data.recordings) ? data.recordings : [];
 

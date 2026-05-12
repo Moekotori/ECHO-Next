@@ -81,7 +81,7 @@ describe('SongCardRenderer', () => {
       coverMimeType: 'image/png',
     });
     const image = sharp(result.pngBuffer).ensureAlpha();
-    const foregroundSample = (await image.clone().extract({ left: 160, top: 160, width: 1, height: 1 }).raw().toBuffer()).subarray(0, 3);
+    const foregroundSample = (await image.clone().extract({ left: 220, top: 300, width: 1, height: 1 }).raw().toBuffer()).subarray(0, 3);
     const backgroundSample = (await image.clone().extract({ left: 1500, top: 160, width: 1, height: 1 }).raw().toBuffer()).subarray(0, 3);
     const cornerAlpha = (await image.clone().extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer())[3];
 
@@ -89,6 +89,32 @@ describe('SongCardRenderer', () => {
     expect(Math.max(...backgroundSample)).toBeGreaterThan(10);
     expect(Buffer.compare(foregroundSample, backgroundSample)).not.toBe(0);
     expect(cornerAlpha).toBe(0);
+  });
+
+  it('renders visible song metadata over the background', async () => {
+    const root = makeTempRoot();
+    const coverPath = join(root, 'cover.png');
+    writeFileSync(coverPath, await makeCover());
+
+    const result = await new SongCardRenderer().render({
+      track,
+      coverPath,
+      coverMimeType: 'image/png',
+    });
+    const textRegion = await sharp(result.pngBuffer)
+      .extract({ left: 840, top: 230, width: 760, height: 470 })
+      .removeAlpha()
+      .raw()
+      .toBuffer();
+    let brightPixels = 0;
+
+    for (let index = 0; index < textRegion.length; index += 3) {
+      if (textRegion[index] > 160 && textRegion[index + 1] > 105 && textRegion[index + 2] > 150) {
+        brightPixels += 1;
+      }
+    }
+
+    expect(brightPixels).toBeGreaterThan(1_000);
   });
 
   it('renders a valid card with long metadata and no cover asset', async () => {

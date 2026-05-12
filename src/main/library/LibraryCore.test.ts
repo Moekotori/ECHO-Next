@@ -3,8 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDatabase } from '../database/createDatabase';
+import { migrations } from '../database/migrations';
 import { MetadataService } from './MetadataService';
 import { createLibraryService } from './LibraryService';
+import type { AlbumMergeStrategy } from './AlbumService';
 import type {
   CoverCacheRepairOptions,
   CoverExtractOptions,
@@ -232,16 +234,40 @@ class FakeFileScanner implements FileScanner {
   }
 }
 
-const createHarness = (overrides: { coverExtractor?: CoverExtractor; metadataReader?: MetadataReader; fileScanner?: FileScanner } = {}) => {
+const createHarness = (
+  overrides: { coverExtractor?: CoverExtractor; metadataReader?: MetadataReader; fileScanner?: FileScanner } = {},
+) => {
   const root = makeTempRoot();
   const folder = join(root, 'music');
   mkdirSync(folder, { recursive: true });
   const metadataService = new MockMetadataService();
   const databasePath = join(root, 'library.sqlite');
   const coverCacheDir = join(root, 'cover-cache');
+  let albumMergeStrategy: AlbumMergeStrategy = 'standard';
   const service = createLibraryService(databasePath, {
     metadataService,
     coverCacheDir,
+    appSettings: () => ({
+      albumMergeStrategy,
+      coverCacheDir,
+      hideToTrayOnClose: false,
+      networkMetadataEnabled: false,
+      networkMetadataProviders: ['netease-cloud-music', 'qq-music'],
+      channelBalance: {
+        enabled: false,
+        balance: 0,
+        leftGainDb: 0,
+        rightGainDb: 0,
+        swapLeftRight: false,
+        monoMode: 'off',
+        invertLeft: false,
+        invertRight: false,
+        constantPower: true,
+      },
+      playerVolume: 1,
+      playbackSpeed: 1,
+      playbackSpeedMode: 'nightcore',
+    }),
     ...overrides,
   });
   let cleanedUp = false;
@@ -281,6 +307,9 @@ const createHarness = (overrides: { coverExtractor?: CoverExtractor; metadataRea
     addFolder() {
       return service.addFolder(folder);
     },
+    setAlbumMergeStrategy(strategy: AlbumMergeStrategy) {
+      albumMergeStrategy = strategy;
+    },
     cleanup() {
       cleanup();
     },
@@ -309,7 +338,19 @@ describe('Library Core', () => {
     const tables = database.prepare<unknown[], { name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
     const indexes = database.prepare<unknown[], { name: string }>("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((row) => row.name);
 
-    expect(tables).toEqual(expect.arrayContaining(['folders', 'tracks', 'albums', 'album_tracks', 'artists', 'covers', 'scan_jobs']));
+    expect(tables).toEqual(
+      expect.arrayContaining([
+        'folders',
+        'tracks',
+        'albums',
+        'album_tracks',
+        'artists',
+        'covers',
+        'scan_jobs',
+        'playback_history',
+        'playback_history_stats',
+      ]),
+    );
     expect(indexes).toEqual(
       expect.arrayContaining([
         'idx_tracks_path',
@@ -322,6 +363,13 @@ describe('Library Core', () => {
         'idx_album_tracks_track_id',
         'idx_folders_path',
         'idx_covers_id',
+        'idx_playback_history_started_at',
+        'idx_playback_history_track_id',
+        'idx_playback_history_completed',
+        'idx_playback_history_track_started',
+        'idx_playback_history_path_started',
+        'idx_playback_history_stats_play_count',
+        'idx_playback_history_stats_last_started_at',
       ]),
     );
 
@@ -329,8 +377,72 @@ describe('Library Core', () => {
     const reopened = createDatabase(databasePath);
     const migrationRows = reopened.prepare<unknown[], { id: number }>('SELECT id FROM schema_migrations ORDER BY id').all();
 
-    expect(migrationRows.map((row) => Number(row.id))).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(migrationRows.map((row) => Number(row.id))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     reopened.close();
+  });
+
+  it('migration backfills playback history stats from existing history rows', () => {
+    const root = makeTempRoot();
+    const databasePath = join(root, 'library.sqlite');
+    const database = createDatabase(databasePath);
+
+    database.exec(`
+      INSERT INTO playback_history (
+        id, track_id, track_path, title, artist, album, album_artist, cover_id,
+        started_at, ended_at, played_seconds, duration_seconds, completed,
+        source_type, source_label, queue_id, created_at
+      ) VALUES
+        ('history-1', 'track-a', 'A.flac', 'Old Title', 'Artist A', 'Album A', 'Album Artist A', NULL,
+          '2026-05-12T10:00:00.000Z', '2026-05-12T10:01:00.000Z', 10, 60, 0,
+          'songs', 'Songs', 'queue-1', '2026-05-12T10:00:00.000Z'),
+        ('history-2', 'track-a', 'A.flac', 'Latest Title', 'Artist A', 'Album A', 'Album Artist A', 'cover-a',
+          '2026-05-12T11:00:00.000Z', '2026-05-12T11:01:00.000Z', 40, 60, 1,
+          'album', 'Album A', 'queue-2', '2026-05-12T11:00:00.000Z'),
+        ('history-3', NULL, 'Stream.flac', 'Stream Title', 'Artist B', 'Album B', 'Album Artist B', NULL,
+          '2026-05-12T12:00:00.000Z', NULL, 5, 0, 0,
+          'stream', 'Stream', NULL, '2026-05-12T12:00:00.000Z');
+      DELETE FROM playback_history_stats;
+    `);
+
+    migrations.find((migration) => migration.id === 8)?.apply(database);
+    const rows = database
+      .prepare<
+        unknown[],
+        {
+          history_key: string;
+          title: string;
+          play_count: number;
+          completed_count: number;
+          total_played_seconds: number;
+          last_started_at: string;
+        }
+      >(
+        `SELECT history_key, title, play_count, completed_count, total_played_seconds, last_started_at
+         FROM playback_history_stats
+         ORDER BY play_count DESC, history_key ASC`,
+      )
+      .all();
+
+    expect(rows).toEqual([
+      {
+        history_key: 'track-a',
+        title: 'Latest Title',
+        play_count: 2,
+        completed_count: 1,
+        total_played_seconds: 50,
+        last_started_at: '2026-05-12T11:00:00.000Z',
+      },
+      {
+        history_key: 'Stream.flac',
+        title: 'Stream Title',
+        play_count: 1,
+        completed_count: 0,
+        total_played_seconds: 5,
+        last_started_at: '2026-05-12T12:00:00.000Z',
+      },
+    ]);
+
+    database.close();
   });
 
   it('can add folder', () => {
@@ -669,6 +781,163 @@ describe('Library Core', () => {
     harness.cleanup();
   });
 
+  it('standard album grouping keeps same title and same cover split across folders without reliable albumArtist', async () => {
+    const coverExtractor = new FakeCoverExtractor({ sourceHash: 'same-cover-hash' });
+    const harness = createHarness({ coverExtractor });
+    const firstFolder = join(harness.folder, 'disc-a');
+    const secondFolder = join(harness.folder, 'disc-b');
+    mkdirSync(firstFolder, { recursive: true });
+    mkdirSync(secondFolder, { recursive: true });
+    const first = writeAudioFile(firstFolder, 'A.flac');
+    const second = writeAudioFile(secondFolder, 'B.flac');
+    harness.metadataService.overrides.set(
+      first,
+      metadataWithSources({ title: 'A', artist: 'Track Artist One', album: 'Same Album', albumArtist: 'Track Artist One' }, { albumArtist: 'artist_fallback' }),
+    );
+    harness.metadataService.overrides.set(
+      second,
+      metadataWithSources({ title: 'B', artist: 'Track Artist Two', album: 'Same Album', albumArtist: 'Track Artist Two' }, { albumArtist: 'artist_fallback' }),
+    );
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const albums = harness.service.getAlbums({ pageSize: 10 });
+
+    expect(albums.total).toBe(2);
+    harness.cleanup();
+  });
+
+  it('sameTitleAndCover album grouping merges same title and same cover across folders and artists', async () => {
+    const coverExtractor = new FakeCoverExtractor({ sourceHash: 'same-cover-hash' });
+    const harness = createHarness({ coverExtractor });
+    harness.setAlbumMergeStrategy('sameTitleAndCover');
+    const firstFolder = join(harness.folder, 'disc-a');
+    const secondFolder = join(harness.folder, 'disc-b');
+    mkdirSync(firstFolder, { recursive: true });
+    mkdirSync(secondFolder, { recursive: true });
+    const first = writeAudioFile(firstFolder, 'A.flac');
+    const second = writeAudioFile(secondFolder, 'B.flac');
+    harness.metadataService.overrides.set(first, baseMetadata({ title: 'A', artist: 'Artist One', album: 'Same Album', albumArtist: 'Album Artist One' }));
+    harness.metadataService.overrides.set(second, baseMetadata({ title: 'B', artist: 'Artist Two', album: 'Same Album', albumArtist: 'Album Artist Two' }));
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const albums = harness.service.getAlbums({ pageSize: 10 });
+
+    expect(albums.total).toBe(1);
+    expect(albums.items[0].trackCount).toBe(2);
+    harness.cleanup();
+  });
+
+  it('sameTitleAndCover album grouping does not merge same title with different covers', async () => {
+    const harness = createHarness({ coverExtractor: new FakeCoverExtractor() });
+    harness.setAlbumMergeStrategy('sameTitleAndCover');
+    const first = writeAudioFile(harness.folder, 'A.flac');
+    const second = writeAudioFile(harness.folder, 'B.flac');
+    harness.metadataService.overrides.set(first, baseMetadata({ title: 'A', artist: 'Artist One', album: 'Same Album', albumArtist: 'Album Artist One' }));
+    harness.metadataService.overrides.set(second, baseMetadata({ title: 'B', artist: 'Artist Two', album: 'Same Album', albumArtist: 'Album Artist Two' }));
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const albums = harness.service.getAlbums({ pageSize: 10 });
+
+    expect(albums.total).toBe(2);
+    harness.cleanup();
+  });
+
+  it('sameTitleAndCover album grouping does not merge different titles with same cover', async () => {
+    const coverExtractor = new FakeCoverExtractor({ sourceHash: 'same-cover-hash' });
+    const harness = createHarness({ coverExtractor });
+    harness.setAlbumMergeStrategy('sameTitleAndCover');
+    const first = writeAudioFile(harness.folder, 'A.flac');
+    const second = writeAudioFile(harness.folder, 'B.flac');
+    harness.metadataService.overrides.set(first, baseMetadata({ title: 'A', artist: 'Artist One', album: 'Album One', albumArtist: 'Album Artist One' }));
+    harness.metadataService.overrides.set(second, baseMetadata({ title: 'B', artist: 'Artist Two', album: 'Album Two', albumArtist: 'Album Artist Two' }));
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const albums = harness.service.getAlbums({ pageSize: 10 });
+
+    expect(albums.total).toBe(2);
+    harness.cleanup();
+  });
+
+  it('sameTitleAndCover album grouping keeps empty and Unknown Album tracks split by track id', async () => {
+    const coverExtractor = new FakeCoverExtractor({ sourceHash: 'same-cover-hash' });
+    const harness = createHarness({ coverExtractor });
+    harness.setAlbumMergeStrategy('sameTitleAndCover');
+    const first = writeAudioFile(harness.folder, 'Loose A.flac');
+    const second = writeAudioFile(harness.folder, 'Loose B.flac');
+    const third = writeAudioFile(harness.folder, 'Loose C.flac');
+    harness.metadataService.overrides.set(first, baseMetadata({ title: 'Loose A', album: '', albumArtist: '' }));
+    harness.metadataService.overrides.set(second, baseMetadata({ title: 'Loose B', album: '', albumArtist: '' }));
+    harness.metadataService.overrides.set(third, baseMetadata({ title: 'Loose C', album: 'Unknown Album', albumArtist: '' }));
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const albums = harness.service.getAlbums({ pageSize: 10 });
+
+    expect(albums.total).toBe(3);
+    harness.cleanup();
+  });
+
+  it('sameTitleAndCover album grouping falls back to standard when cover hash is missing', async () => {
+    const harness = createHarness({ coverExtractor: new ThrowingCoverExtractor() });
+    harness.setAlbumMergeStrategy('sameTitleAndCover');
+    const firstFolder = join(harness.folder, 'disc-a');
+    const secondFolder = join(harness.folder, 'disc-b');
+    mkdirSync(firstFolder, { recursive: true });
+    mkdirSync(secondFolder, { recursive: true });
+    const first = writeAudioFile(firstFolder, 'A.flac');
+    const second = writeAudioFile(secondFolder, 'B.flac');
+    harness.metadataService.overrides.set(
+      first,
+      metadataWithSources({ title: 'A', artist: 'Track Artist One', album: 'Same Album', albumArtist: 'Track Artist One' }, { albumArtist: 'artist_fallback' }),
+    );
+    harness.metadataService.overrides.set(
+      second,
+      metadataWithSources({ title: 'B', artist: 'Track Artist Two', album: 'Same Album', albumArtist: 'Track Artist Two' }, { albumArtist: 'artist_fallback' }),
+    );
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const albums = harness.service.getAlbums({ pageSize: 10 });
+
+    expect(albums.total).toBe(2);
+    harness.cleanup();
+  });
+
+  it('refreshAlbumGrouping rebuilds album tables after changing strategy without rescanning files', async () => {
+    const coverExtractor = new FakeCoverExtractor({ sourceHash: 'same-cover-hash' });
+    const harness = createHarness({ coverExtractor });
+    const firstFolder = join(harness.folder, 'disc-a');
+    const secondFolder = join(harness.folder, 'disc-b');
+    mkdirSync(firstFolder, { recursive: true });
+    mkdirSync(secondFolder, { recursive: true });
+    const first = writeAudioFile(firstFolder, 'A.flac');
+    const second = writeAudioFile(secondFolder, 'B.flac');
+    harness.metadataService.overrides.set(
+      first,
+      metadataWithSources({ title: 'A', artist: 'Track Artist One', album: 'Same Album', albumArtist: 'Track Artist One' }, { albumArtist: 'artist_fallback' }),
+    );
+    harness.metadataService.overrides.set(
+      second,
+      metadataWithSources({ title: 'B', artist: 'Track Artist Two', album: 'Same Album', albumArtist: 'Track Artist Two' }, { albumArtist: 'artist_fallback' }),
+    );
+    harness.addFolder();
+
+    await harness.scanFolder();
+    expect(harness.service.getAlbums({ pageSize: 10 }).total).toBe(2);
+    const metadataCallsAfterScan = harness.metadataService.calls.length;
+    harness.setAlbumMergeStrategy('sameTitleAndCover');
+    const summary = harness.service.refreshAlbumGrouping();
+
+    expect(summary.albumCount).toBe(1);
+    expect(harness.service.getAlbums({ pageSize: 10 }).items[0].trackCount).toBe(2);
+    expect(harness.metadataService.calls).toHaveLength(metadataCallsAfterScan);
+    harness.cleanup();
+  });
+
   it('album grouping different albumArtist does not merge', async () => {
     const harness = createHarness();
     const first = writeAudioFile(harness.folder, 'A.flac');
@@ -783,6 +1052,190 @@ describe('Library Core', () => {
     harness.cleanup();
   });
 
+  it('getTracks search matches multiple terms across metadata fields', async () => {
+    const harness = createHarness();
+    const match = writeAudioFile(harness.folder, 'Loose Match.flac');
+    const miss = writeAudioFile(harness.folder, 'Loose Miss.flac');
+    harness.metadataService.overrides.set(match, baseMetadata({ title: 'Seven Mile', artist: 'Blue Harbor', album: 'Night Signals' }));
+    harness.metadataService.overrides.set(miss, baseMetadata({ title: 'Seven Mile', artist: 'Red Harbor', album: 'Morning Signals' }));
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const tracks = harness.service.getTracks({ search: 'blue seven', pageSize: 10 });
+
+    expect(tracks.total).toBe(1);
+    expect(tracks.items[0].title).toBe('Seven Mile');
+    harness.cleanup();
+  });
+
+  it('getTracks search matches filenames and paths when metadata is sparse', async () => {
+    const harness = createHarness();
+    const filePath = writeAudioFile(harness.folder, 'bootleg-live-take.flac');
+    harness.metadataService.overrides.set(filePath, baseMetadata({ title: 'Untitled', artist: 'Unknown Artist', album: 'Unknown Album' }));
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const tracks = harness.service.getTracks({ search: 'bootleg live', pageSize: 10 });
+
+    expect(tracks.total).toBe(1);
+    expect(tracks.items[0].path).toBe(filePath);
+    harness.cleanup();
+  });
+
+  it('playback history stores redundant track metadata and only completed plays increment play_count', async () => {
+    const harness = createHarness();
+    const filePath = writeAudioFile(harness.folder, 'History Song.flac');
+    harness.metadataService.overrides.set(
+      filePath,
+      baseMetadata({
+        title: 'History Title',
+        artist: 'History Artist',
+        album: 'History Album',
+        albumArtist: 'History Album Artist',
+        duration: 120,
+      }),
+    );
+    harness.addFolder();
+    await harness.scanFolder();
+    const track = harness.service.getTracks({ pageSize: 1 }).items[0];
+
+    const first = harness.service.startPlaybackHistory({
+      trackId: track.id,
+      sourceType: 'songs',
+      sourceLabel: 'Songs',
+      queueId: 'queue-1',
+    });
+    const unfinished = harness.service.finishPlaybackHistory({
+      historyId: first.historyId,
+      playedSeconds: 12,
+    });
+    const second = harness.service.startPlaybackHistory({
+      trackId: track.id,
+      sourceType: 'album',
+      sourceLabel: 'History Album',
+      queueId: 'queue-2',
+    });
+    const completed = harness.service.finishPlaybackHistory({
+      historyId: second.historyId,
+      playedSeconds: 61,
+      endedAt: '2026-05-12T12:00:00.000Z',
+    });
+
+    expect(unfinished?.completed).toBe(false);
+    expect(completed?.completed).toBe(true);
+    expect(completed).toMatchObject({
+      trackId: track.id,
+      trackPath: filePath,
+      title: 'History Title',
+      artist: 'History Artist',
+      album: 'History Album',
+      albumArtist: 'History Album Artist',
+      sourceType: 'album',
+      sourceLabel: 'History Album',
+      queueId: 'queue-2',
+      endedAt: '2026-05-12T12:00:00.000Z',
+    });
+
+    harness.service.finishPlaybackHistory({
+      historyId: second.historyId,
+      playedSeconds: 70,
+      completed: true,
+      endedAt: '2026-05-12T12:05:00.000Z',
+    });
+
+    const database = createDatabase(harness.databasePath);
+    const row = database
+      .prepare<unknown[], { play_count: number; last_played_at: string | null }>('SELECT play_count, last_played_at FROM tracks WHERE id = ?')
+      .get(track.id);
+    const stats = database
+      .prepare<
+        unknown[],
+        {
+          play_count: number;
+          completed_count: number;
+          total_played_seconds: number;
+          last_ended_at: string | null;
+          title: string;
+          source_label: string | null;
+        }
+      >(
+        `SELECT play_count, completed_count, total_played_seconds, last_ended_at, title, source_label
+         FROM playback_history_stats
+         WHERE history_key = ?`,
+      )
+      .get(track.id);
+    database.close();
+
+    expect(row?.play_count).toBe(1);
+    expect(row?.last_played_at).toBe('2026-05-12T12:00:00.000Z');
+    expect(stats).toMatchObject({
+      play_count: 2,
+      completed_count: 1,
+      total_played_seconds: 82,
+      last_ended_at: '2026-05-12T12:05:00.000Z',
+      title: 'History Title',
+      source_label: 'History Album',
+    });
+    harness.cleanup();
+  });
+
+  it('playback history supports paging, search, completed filters, and cleanup without deleting tracks', async () => {
+    const harness = createHarness();
+    const firstFile = writeAudioFile(harness.folder, 'Needle Song.flac');
+    const secondFile = writeAudioFile(harness.folder, 'Other Song.flac');
+    harness.metadataService.overrides.set(firstFile, baseMetadata({ title: 'Needle Title', artist: 'Blue Artist', album: 'Night Album', duration: 60 }));
+    harness.metadataService.overrides.set(secondFile, baseMetadata({ title: 'Other Title', artist: 'Red Artist', album: 'Day Album', duration: 60 }));
+    harness.addFolder();
+    await harness.scanFolder();
+    const tracks = harness.service.getTracks({ pageSize: 10 }).items;
+    const needle = tracks.find((track) => track.title === 'Needle Title')!;
+    const other = tracks.find((track) => track.title === 'Other Title')!;
+    const first = harness.service.startPlaybackHistory({ trackId: needle.id, sourceType: 'songs', sourceLabel: 'Songs' });
+    const second = harness.service.startPlaybackHistory({ trackId: other.id, sourceType: 'songs', sourceLabel: 'Songs' });
+    const third = harness.service.startPlaybackHistory({ trackId: needle.id, sourceType: 'songs', sourceLabel: 'Songs' });
+
+    harness.service.finishPlaybackHistory({ historyId: first.historyId, playedSeconds: 10 });
+    harness.service.finishPlaybackHistory({ historyId: second.historyId, playedSeconds: 35 });
+    harness.service.finishPlaybackHistory({ historyId: third.historyId, playedSeconds: 40 });
+
+    const firstPage = harness.service.getPlaybackHistory({ page: 1, pageSize: 1 });
+    const secondPage = harness.service.getPlaybackHistory({ page: 2, pageSize: 1 });
+    const search = harness.service.getPlaybackHistory({ search: 'Needle Blue', pageSize: 10 });
+    const completedOnly = harness.service.getPlaybackHistory({ completedOnly: true, pageSize: 10 });
+
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.hasMore).toBe(true);
+    expect(firstPage.items[0]).toMatchObject({ title: 'Needle Title', playCount: 2 });
+    expect(secondPage.items).toHaveLength(1);
+    expect(secondPage.items[0]).toMatchObject({ title: 'Other Title', playCount: 1 });
+    expect(search.items.map((item) => item.title)).toEqual(['Needle Title']);
+    expect(completedOnly.items.map((item) => item.title)).toEqual(['Needle Title', 'Other Title']);
+
+    harness.service.deletePlaybackHistoryEntry(firstPage.items[0].id);
+    expect(harness.service.getPlaybackHistory({ pageSize: 10 }).total).toBe(1);
+
+    harness.service.clearPlaybackHistory();
+    expect(harness.service.getPlaybackHistory({ pageSize: 10 }).total).toBe(0);
+    expect(harness.service.getTracks({ pageSize: 10 }).total).toBe(2);
+    harness.cleanup();
+  });
+
+  it('getAlbums search matches tracks inside an album', async () => {
+    const harness = createHarness();
+    const first = writeAudioFile(harness.folder, 'A.flac');
+    const second = writeAudioFile(harness.folder, 'B.flac');
+    harness.metadataService.overrides.set(first, baseMetadata({ title: 'Hidden Track', artist: 'Searchable Artist', album: 'Deep Cuts', albumArtist: 'Various Artists' }));
+    harness.metadataService.overrides.set(second, baseMetadata({ title: 'B Side', artist: 'Other Artist', album: 'Deep Cuts', albumArtist: 'Various Artists' }));
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const albums = harness.service.getAlbums({ search: 'searchable hidden', pageSize: 10 });
+
+    expect(albums.total).toBe(1);
+    expect(albums.items[0].title).toBe('Deep Cuts');
+    harness.cleanup();
+  });
+
   it('getAlbumTracks returns paginated tracks from persisted album_tracks', async () => {
     const harness = createHarness();
     writeAudioFile(harness.folder, 'A.flac');
@@ -797,6 +1250,68 @@ describe('Library Core', () => {
     expect(firstPage.items).toHaveLength(1);
     expect(firstPage.hasMore).toBe(true);
     expect(secondPage.items).toHaveLength(1);
+    harness.cleanup();
+  });
+
+  it('getArtistTracks returns case-insensitive artist tracks with pagination and sorting', async () => {
+    const harness = createHarness();
+    const first = writeAudioFile(harness.folder, 'A.flac');
+    const second = writeAudioFile(harness.folder, 'B.flac');
+    const third = writeAudioFile(harness.folder, 'C.flac');
+    const other = writeAudioFile(harness.folder, 'D.flac');
+    harness.metadataService.overrides.set(
+      first,
+      baseMetadata({ title: 'Second Song', artist: 'Echo Unit', album: 'Alpha', albumArtist: 'Echo Unit', trackNo: 2, duration: 120 }),
+    );
+    harness.metadataService.overrides.set(
+      second,
+      baseMetadata({ title: 'First Song', artist: 'echo unit', album: 'Alpha', albumArtist: 'Echo Unit', trackNo: 1, duration: 240 }),
+    );
+    harness.metadataService.overrides.set(
+      third,
+      baseMetadata({ title: 'Third Song', artist: 'Echo Unit', album: 'Beta', albumArtist: 'Echo Unit', trackNo: 1, duration: 360 }),
+    );
+    harness.metadataService.overrides.set(
+      other,
+      baseMetadata({ title: 'Other Song', artist: 'Other Artist', album: 'Elsewhere', albumArtist: 'Other Artist' }),
+    );
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const [artist] = harness.service.getArtists({ search: 'Echo Unit', pageSize: 1 }).items;
+    const firstPage = harness.service.getArtistTracks(artist.id, { page: 1, pageSize: 2 });
+    const secondPage = harness.service.getArtistTracks(artist.id, { page: 2, pageSize: 2 });
+    const durationSorted = harness.service.getArtistTracks(artist.id, { page: 1, pageSize: 3, sort: 'durationDesc' });
+
+    expect(firstPage.total).toBe(3);
+    expect(firstPage.items.map((track) => track.title)).toEqual(['First Song', 'Second Song']);
+    expect(firstPage.hasMore).toBe(true);
+    expect(secondPage.items.map((track) => track.title)).toEqual(['Third Song']);
+    expect(durationSorted.items.map((track) => track.title)).toEqual(['Third Song', 'First Song', 'Second Song']);
+    harness.cleanup();
+  });
+
+  it('getArtistAlbums returns albums by album artist with pagination', async () => {
+    const harness = createHarness();
+    const first = writeAudioFile(harness.folder, 'AlbumA.flac');
+    const second = writeAudioFile(harness.folder, 'AlbumB.flac');
+    const other = writeAudioFile(harness.folder, 'AlbumC.flac');
+    harness.metadataService.overrides.set(first, baseMetadata({ title: 'A', artist: 'Echo Unit', album: 'First Album', albumArtist: 'Echo Unit' }));
+    harness.metadataService.overrides.set(second, baseMetadata({ title: 'B', artist: 'Echo Unit', album: 'Second Album', albumArtist: 'Echo Unit' }));
+    harness.metadataService.overrides.set(other, baseMetadata({ title: 'C', artist: 'Other Artist', album: 'Other Album', albumArtist: 'Other Artist' }));
+    harness.addFolder();
+
+    await harness.scanFolder();
+    const [artist] = harness.service.getArtists({ search: 'Echo Unit', pageSize: 1 }).items;
+    const firstPage = harness.service.getArtistAlbums(artist.id, { page: 1, pageSize: 1 });
+    const secondPage = harness.service.getArtistAlbums(artist.id, { page: 2, pageSize: 1 });
+
+    expect(firstPage.total).toBe(2);
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.items[0].title).toBe('First Album');
+    expect(firstPage.hasMore).toBe(true);
+    expect(secondPage.items).toHaveLength(1);
+    expect(secondPage.items[0].title).toBe('Second Album');
     harness.cleanup();
   });
 

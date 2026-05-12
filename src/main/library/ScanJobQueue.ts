@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import type { AlbumService } from './AlbumService';
+import type { AlbumMergeStrategy, AlbumService } from './AlbumService';
 import type { LibraryStore } from './LibraryStore';
 import type {
   CoverResult,
@@ -38,6 +38,7 @@ type ScanJobQueueOptions = {
   coverCacheDir: string;
   metadataConcurrency?: number;
   coverConcurrency?: number;
+  getAlbumMergeStrategy?: () => AlbumMergeStrategy;
 };
 
 const progressFlushIntervalMs = 300;
@@ -59,6 +60,7 @@ export class ScanJobQueue {
   private readonly runningJobs = new Map<string, Promise<void>>();
   private readonly metadataConcurrency: number;
   private readonly coverConcurrency: number;
+  private readonly getAlbumMergeStrategy: () => AlbumMergeStrategy;
   private coverCacheDir: string;
 
   constructor(
@@ -71,6 +73,7 @@ export class ScanJobQueue {
   ) {
     this.metadataConcurrency = options.metadataConcurrency ?? 2;
     this.coverConcurrency = options.coverConcurrency ?? 2;
+    this.getAlbumMergeStrategy = options.getAlbumMergeStrategy ?? (() => 'standard');
     this.coverCacheDir = options.coverCacheDir;
   }
 
@@ -338,7 +341,7 @@ export class ScanJobQueue {
           coverCount,
           errors,
         });
-        this.store.refreshAlbums(this.albumService, timestamp);
+        this.store.refreshAlbums(this.albumService, timestamp, { albumMergeStrategy: this.getAlbumMergeStrategy() });
         this.store.refreshArtists();
         progress.flushNow({
           phase: 'writing_database',

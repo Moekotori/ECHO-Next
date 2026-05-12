@@ -62,7 +62,7 @@ const uniqueValues = (values: Array<string | null | undefined>): string[] =>
 const formatTrackCount = (count: number): string => `${count} ${count === 1 ? 'track' : 'tracks'}`;
 
 export const AlbumDetailView = ({ album, onBack }: AlbumDetailViewProps): JSX.Element => {
-  const { currentTrackId, playTrack, setQueue } = usePlaybackQueue();
+  const { currentTrackId, playTrack, replaceQueue } = usePlaybackQueue();
   const [firstTrack, setFirstTrack] = useState<LibraryTrack | null>(null);
   const [loadedTracks, setLoadedTracks] = useState<LibraryTrack[]>([]);
   const [loadedTotal, setLoadedTotal] = useState(0);
@@ -111,6 +111,10 @@ export const AlbumDetailView = ({ album, onBack }: AlbumDetailViewProps): JSX.El
     ],
     [album.trackCount, album.year, loadedTotal, loadedTracks.length, signalItems, textureItems],
   );
+  const albumSource = useMemo(
+    () => ({ type: 'album' as const, label: album.title, albumId: album.id }),
+    [album.id, album.title],
+  );
 
   const handleFirstTrackChange = useCallback((track: LibraryTrack | null, isLoading: boolean): void => {
     setFirstTrack(track);
@@ -133,21 +137,27 @@ export const AlbumDetailView = ({ album, onBack }: AlbumDetailViewProps): JSX.El
     async (track: LibraryTrack): Promise<void> => {
       try {
         setPlayError(null);
-        await playTrack(withAlbumCoverFallback(track));
+        const playableTracks = (loadedTracks.length > 0 ? loadedTracks : [track]).map(withAlbumCoverFallback);
+        await playTrack(withAlbumCoverFallback(track), {
+          replaceQueueWith: playableTracks,
+          source: albumSource,
+        });
       } catch (error) {
         setPlayError(error instanceof Error ? error.message : String(error));
       }
     },
-    [playTrack, withAlbumCoverFallback],
+    [albumSource, loadedTracks, playTrack, withAlbumCoverFallback],
   );
 
   const handlePlayNow = useCallback((): void => {
     if (firstTrack) {
+      // TODO: load the complete album queue through LibraryService once that API can fetch all album tracks at once.
       const playableTracks = loadedTracks.length > 0 ? loadedTracks.map(withAlbumCoverFallback) : [withAlbumCoverFallback(firstTrack)];
-      setQueue(playableTracks);
-      void handlePlayTrack(playableTracks[0] ?? firstTrack);
+      const firstPlayableTrack = playableTracks[0] ?? firstTrack;
+      replaceQueue(playableTracks, { startTrackId: firstPlayableTrack.id, source: albumSource });
+      void playTrack(firstPlayableTrack, { source: albumSource });
     }
-  }, [firstTrack, handlePlayTrack, loadedTracks, setQueue, withAlbumCoverFallback]);
+  }, [albumSource, firstTrack, loadedTracks, playTrack, replaceQueue, withAlbumCoverFallback]);
 
   return (
     <div className="album-detail-page">

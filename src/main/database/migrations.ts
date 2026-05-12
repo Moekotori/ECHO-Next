@@ -158,6 +158,139 @@ export const migrations: Migration[] = [
       addColumnIfMissing(database, 'tracks', 'last_played_at', 'last_played_at TEXT');
     },
   },
+  {
+    id: 7,
+    apply: (database) => {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS playback_history (
+          id TEXT PRIMARY KEY,
+          track_id TEXT,
+          track_path TEXT NOT NULL,
+          title TEXT NOT NULL,
+          artist TEXT NOT NULL,
+          album TEXT,
+          album_artist TEXT,
+          cover_id TEXT,
+          started_at TEXT NOT NULL,
+          ended_at TEXT,
+          played_seconds REAL NOT NULL DEFAULT 0,
+          duration_seconds REAL NOT NULL DEFAULT 0,
+          completed INTEGER NOT NULL DEFAULT 0,
+          source_type TEXT,
+          source_label TEXT,
+          queue_id TEXT,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_playback_history_started_at ON playback_history(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_playback_history_track_id ON playback_history(track_id);
+        CREATE INDEX IF NOT EXISTS idx_playback_history_completed ON playback_history(completed);
+      `);
+    },
+  },
+  {
+    id: 8,
+    apply: (database) => {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS playback_history_stats (
+          history_key TEXT PRIMARY KEY,
+          track_id TEXT,
+          track_path TEXT NOT NULL,
+          title TEXT NOT NULL,
+          artist TEXT NOT NULL,
+          album TEXT,
+          album_artist TEXT,
+          cover_id TEXT,
+          play_count INTEGER NOT NULL DEFAULT 0,
+          completed_count INTEGER NOT NULL DEFAULT 0,
+          total_played_seconds REAL NOT NULL DEFAULT 0,
+          duration_seconds REAL NOT NULL DEFAULT 0,
+          last_started_at TEXT NOT NULL,
+          last_ended_at TEXT,
+          source_type TEXT,
+          source_label TEXT,
+          queue_id TEXT,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_playback_history_stats_play_count ON playback_history_stats(play_count DESC, last_started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_playback_history_stats_last_started_at ON playback_history_stats(last_started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_playback_history_track_started ON playback_history(track_id, started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_playback_history_path_started ON playback_history(track_path, started_at DESC);
+
+        INSERT INTO playback_history_stats (
+          history_key, track_id, track_path, title, artist, album, album_artist, cover_id,
+          play_count, completed_count, total_played_seconds, duration_seconds,
+          last_started_at, last_ended_at, source_type, source_label, queue_id, updated_at
+        )
+        WITH grouped_history AS (
+          SELECT
+            COALESCE(track_id, track_path) AS history_key,
+            COUNT(*) AS play_count,
+            COALESCE(SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END), 0) AS completed_count,
+            COALESCE(SUM(played_seconds), 0) AS total_played_seconds,
+            MAX(started_at) AS last_started_at,
+            MAX(ended_at) AS last_ended_at
+          FROM playback_history
+          GROUP BY COALESCE(track_id, track_path)
+        ),
+        latest_history AS (
+          SELECT playback_history.*
+          FROM playback_history
+          INNER JOIN grouped_history
+            ON COALESCE(playback_history.track_id, playback_history.track_path) = grouped_history.history_key
+          WHERE playback_history.id = (
+            SELECT latest.id
+            FROM playback_history AS latest
+            WHERE COALESCE(latest.track_id, latest.track_path) = grouped_history.history_key
+            ORDER BY latest.started_at DESC, latest.created_at DESC, latest.id DESC
+            LIMIT 1
+          )
+        )
+        SELECT
+          grouped_history.history_key,
+          latest_history.track_id,
+          latest_history.track_path,
+          latest_history.title,
+          latest_history.artist,
+          latest_history.album,
+          latest_history.album_artist,
+          latest_history.cover_id,
+          grouped_history.play_count,
+          grouped_history.completed_count,
+          grouped_history.total_played_seconds,
+          latest_history.duration_seconds,
+          grouped_history.last_started_at,
+          grouped_history.last_ended_at,
+          latest_history.source_type,
+          latest_history.source_label,
+          latest_history.queue_id,
+          COALESCE(grouped_history.last_ended_at, grouped_history.last_started_at)
+        FROM grouped_history
+        INNER JOIN latest_history
+          ON COALESCE(latest_history.track_id, latest_history.track_path) = grouped_history.history_key
+        WHERE 1 = 1
+        ON CONFLICT(history_key) DO UPDATE SET
+          track_id = excluded.track_id,
+          track_path = excluded.track_path,
+          title = excluded.title,
+          artist = excluded.artist,
+          album = excluded.album,
+          album_artist = excluded.album_artist,
+          cover_id = excluded.cover_id,
+          play_count = excluded.play_count,
+          completed_count = excluded.completed_count,
+          total_played_seconds = excluded.total_played_seconds,
+          duration_seconds = excluded.duration_seconds,
+          last_started_at = excluded.last_started_at,
+          last_ended_at = excluded.last_ended_at,
+          source_type = excluded.source_type,
+          source_label = excluded.source_label,
+          queue_id = excluded.queue_id,
+          updated_at = excluded.updated_at;
+      `);
+    },
+  },
 ];
 
 export const runMigrations = (database: EchoDatabase): void => {

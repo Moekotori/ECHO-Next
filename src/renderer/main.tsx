@@ -16,6 +16,8 @@ import './styles/app.css';
 import './styles/songs.css';
 import './styles/eq.css';
 import './styles/album-detail.css';
+import './styles/artist-detail.css';
+import './styles/queue.css';
 
 const appearancePreferences = readAppearancePreferences();
 const appBridge = getAppBridge();

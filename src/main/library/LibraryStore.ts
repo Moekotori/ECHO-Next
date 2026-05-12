@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { basename, resolve } from 'node:path';
 import type { EchoDatabase } from '../database/createDatabase';
-import type { AlbumService } from './AlbumService';
+import type { AlbumMergeStrategy, AlbumService } from './AlbumService';
 import { updateCoverPathsInDatabase } from './CoverCacheManager';
 import type {
   CoverSource,
@@ -13,6 +13,9 @@ import type {
   LibraryFolder,
   LibraryPage,
   LibraryPageQuery,
+  PlaybackHistoryEntry,
+  PlaybackHistoryQuery,
+  PlaybackHistorySummary,
   LibraryScanStatus,
   LibrarySummary,
   LibraryTrack,
@@ -37,7 +40,60 @@ const pageFromQuery = (query?: LibraryPageQuery): { page: number; pageSize: numb
   sort: query?.sort ?? 'default',
 });
 
+const pageFromHistoryQuery = (
+  query?: PlaybackHistoryQuery,
+): { page: number; pageSize: number; search: string; from: string | null; to: string | null; completedOnly: boolean } => ({
+  page: Math.max(1, Math.floor(Number(query?.page ?? 1))),
+  pageSize: Math.min(maxPageSize, Math.max(1, Math.floor(Number(query?.pageSize ?? 50)))),
+  search: typeof query?.search === 'string' ? query.search.trim() : '',
+  from: typeof query?.from === 'string' && query.from.trim() ? query.from.trim() : null,
+  to: typeof query?.to === 'string' && query.to.trim() ? query.to.trim() : null,
+  completedOnly: query?.completedOnly === true,
+});
+
 const likeSearch = (search: string): string => `%${search.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
+const searchSeparatorPattern = /[\s!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~_-]+/u;
+const cjkPattern = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+type SearchPredicate = (term: string) => { sql: string; params: string[] };
+
+const likePredicate =
+  (expression: string): SearchPredicate =>
+  (term) => ({
+    sql: `${expression} LIKE ? ESCAPE '\\'`,
+    params: [likeSearch(term)],
+  });
+
+const searchTerms = (search: string): string[] => {
+  const normalized = search.normalize('NFKC').trim();
+  const parts = normalized.split(searchSeparatorPattern).filter(Boolean);
+  const terms =
+    parts.length === 1 && cjkPattern.test(parts[0]) && Array.from(parts[0]).length > 2 ? Array.from(parts[0]) : parts;
+
+  return Array.from(new Set(terms)).slice(0, 12);
+};
+
+const buildSearchFilter = (
+  search: string,
+  predicates: SearchPredicate[],
+): { sql: string; params: string[] } => {
+  const terms = searchTerms(search);
+
+  if (terms.length === 0) {
+    return { sql: '', params: [] };
+  }
+
+  const params: string[] = [];
+  const sql = terms
+    .map((term) => {
+      const clauses = predicates.map((predicate) => predicate(term));
+      params.push(...clauses.flatMap((clause) => clause.params));
+      return `(${clauses.map((clause) => clause.sql).join(' OR ')})`;
+    })
+    .join(' AND ');
+
+  return { sql, params };
+};
 
 const parseJsonObject = (value: unknown): Record<string, string> => {
   if (typeof value !== 'string') {
@@ -67,6 +123,7 @@ const parseErrors = (value: unknown): string[] => {
 
 const textOrNull = (value: unknown): string | null => (typeof value === 'string' && value.length > 0 ? value : null);
 const numberOrNull = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+const playbackHistoryKey = (trackId: string | null, trackPath: string): string => trackId ?? trackPath;
 const coverSourceOrNull = (value: unknown): CoverSource | null =>
   value === 'manual' || value === 'embedded' || value === 'folder' || value === 'network' || value === 'default' ? value : null;
 const coverSourceRank: Record<CoverSource, number> = {
@@ -480,6 +537,269 @@ export class LibraryStore {
     );
   }
 
+  createPlaybackHistoryEntry(input: {
+    trackId: string | null;
+    trackPath: string;
+    title: string;
+    artist: string;
+    album: string;
+    albumArtist: string;
+    coverId: string | null;
+    durationSeconds: number;
+    sourceType?: string | null;
+    sourceLabel?: string | null;
+    queueId?: string | null;
+    startedAt?: string;
+  }): PlaybackHistoryEntry {
+    const id = randomUUID();
+    const startedAt = input.startedAt ?? nowIso();
+    const durationSeconds = Math.max(0, Number(input.durationSeconds) || 0);
+    const sourceType = textOrNull(input.sourceType);
+    const sourceLabel = textOrNull(input.sourceLabel);
+    const queueId = textOrNull(input.queueId);
+    const historyKey = playbackHistoryKey(input.trackId, input.trackPath);
+
+    return this.transaction(() => {
+      this.run(
+        `INSERT INTO playback_history (
+          id, track_id, track_path, title, artist, album, album_artist, cover_id,
+          started_at, ended_at, played_seconds, duration_seconds, completed,
+          source_type, source_label, queue_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        input.trackId,
+        input.trackPath,
+        input.title,
+        input.artist,
+        input.album,
+        input.albumArtist,
+        input.coverId,
+        startedAt,
+        null,
+        0,
+        durationSeconds,
+        0,
+        sourceType,
+        sourceLabel,
+        queueId,
+        startedAt,
+      );
+
+      this.run(
+        `INSERT INTO playback_history_stats (
+          history_key, track_id, track_path, title, artist, album, album_artist, cover_id,
+          play_count, completed_count, total_played_seconds, duration_seconds,
+          last_started_at, last_ended_at, source_type, source_label, queue_id, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(history_key) DO UPDATE SET
+          track_id = excluded.track_id,
+          track_path = excluded.track_path,
+          title = excluded.title,
+          artist = excluded.artist,
+          album = excluded.album,
+          album_artist = excluded.album_artist,
+          cover_id = excluded.cover_id,
+          play_count = playback_history_stats.play_count + 1,
+          duration_seconds = excluded.duration_seconds,
+          last_started_at = excluded.last_started_at,
+          source_type = excluded.source_type,
+          source_label = excluded.source_label,
+          queue_id = excluded.queue_id,
+          updated_at = excluded.updated_at`,
+        historyKey,
+        input.trackId,
+        input.trackPath,
+        input.title,
+        input.artist,
+        input.album,
+        input.albumArtist,
+        input.coverId,
+        1,
+        0,
+        0,
+        durationSeconds,
+        startedAt,
+        null,
+        sourceType,
+        sourceLabel,
+        queueId,
+        startedAt,
+      );
+
+      const entry = this.getPlaybackHistoryEntry(id);
+      if (!entry) {
+        throw new Error(`Failed to create playback history entry ${id}`);
+      }
+
+      return entry;
+    });
+  }
+
+  finishPlaybackHistoryEntry(
+    id: string,
+    input: { playedSeconds: number; completed?: boolean; endedAt?: string },
+  ): PlaybackHistoryEntry | null {
+    return this.transaction(() => {
+      const current = this.getRow('SELECT * FROM playback_history WHERE id = ?', id);
+      if (!current) {
+        return null;
+      }
+
+      const endedAt = input.endedAt ?? nowIso();
+      const playedSeconds = Math.max(0, Number(input.playedSeconds) || 0);
+      const durationSeconds = Number(current.duration_seconds ?? 0);
+      const completed = input.completed ?? this.isPlaybackCompleted(playedSeconds, durationSeconds);
+      const previousPlayedSeconds = Math.max(0, Number(current.played_seconds ?? 0) || 0);
+      const wasCompleted = Number(current.completed ?? 0) === 1;
+      const historyKey = playbackHistoryKey(textOrNull(current.track_id), String(current.track_path));
+
+      this.run(
+        `UPDATE playback_history SET
+          ended_at = ?,
+          played_seconds = ?,
+          completed = ?
+        WHERE id = ?`,
+        endedAt,
+        playedSeconds,
+        completed ? 1 : 0,
+        id,
+      );
+
+      this.run(
+        `UPDATE playback_history_stats SET
+          total_played_seconds = MAX(0, COALESCE(total_played_seconds, 0) + ?),
+          completed_count = MAX(0, COALESCE(completed_count, 0) + ?),
+          last_ended_at = ?,
+          updated_at = ?
+        WHERE history_key = ?`,
+        playedSeconds - previousPlayedSeconds,
+        (completed ? 1 : 0) - (wasCompleted ? 1 : 0),
+        endedAt,
+        endedAt,
+        historyKey,
+      );
+
+      const trackId = textOrNull(current.track_id);
+      if (completed && !wasCompleted && trackId) {
+        this.recordTrackPlayback(trackId, endedAt);
+      }
+
+      return this.getPlaybackHistoryEntry(id);
+    });
+  }
+
+  getPlaybackHistory(query?: PlaybackHistoryQuery): LibraryPage<PlaybackHistoryEntry> {
+    const { page, pageSize, search, from, to, completedOnly } = pageFromHistoryQuery(query);
+    const offset = (page - 1) * pageSize;
+    const searchFilter = buildSearchFilter(search, [
+      likePredicate('playback_history_stats.title'),
+      likePredicate('playback_history_stats.artist'),
+      likePredicate("COALESCE(playback_history_stats.album, '')"),
+      likePredicate('playback_history_stats.track_path'),
+    ]);
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+
+    if (searchFilter.sql) {
+      clauses.push(searchFilter.sql);
+      params.push(...searchFilter.params);
+    }
+
+    if (from) {
+      clauses.push('playback_history_stats.last_started_at >= ?');
+      params.push(from);
+    }
+
+    if (to) {
+      clauses.push('playback_history_stats.last_started_at < ?');
+      params.push(to);
+    }
+
+    if (completedOnly) {
+      clauses.push('playback_history_stats.completed_count > 0');
+    }
+
+    const whereSql = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const totalRow = this.getRow(
+      `SELECT COUNT(*) AS total
+       FROM playback_history_stats
+       ${whereSql}`,
+      ...params,
+    );
+    const rows = this.allRows(
+      `SELECT
+         history_key AS id,
+         track_id,
+         track_path,
+         title,
+         artist,
+         album,
+         album_artist,
+         cover_id,
+         last_started_at AS started_at,
+         last_ended_at AS ended_at,
+         total_played_seconds AS played_seconds,
+         duration_seconds,
+         play_count AS history_play_count,
+         completed_count,
+         source_type,
+         source_label,
+         queue_id
+       FROM playback_history_stats
+       ${whereSql}
+       ORDER BY play_count DESC, last_started_at DESC
+       LIMIT ? OFFSET ?`,
+      ...params,
+      pageSize,
+      offset,
+    );
+    const total = Number(totalRow?.total ?? 0);
+
+    return {
+      items: rows.map((row) => this.mapPlaybackHistoryEntry(row)),
+      page,
+      pageSize,
+      total,
+      hasMore: offset + rows.length < total,
+    };
+  }
+
+  deletePlaybackHistoryEntry(id: string): void {
+    this.transaction(() => {
+      this.run('DELETE FROM playback_history WHERE COALESCE(track_id, track_path) = ?', id);
+      this.run('DELETE FROM playback_history_stats WHERE history_key = ?', id);
+    });
+  }
+
+  clearPlaybackHistory(): void {
+    this.transaction(() => {
+      this.run('DELETE FROM playback_history');
+      this.run('DELETE FROM playback_history_stats');
+    });
+  }
+
+  getPlaybackHistorySummary(now = new Date()): PlaybackHistorySummary {
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date(startOfToday);
+    endOfToday.setDate(endOfToday.getDate() + 1);
+    const todayRow = this.getRow(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(played_seconds), 0) AS played_seconds
+       FROM playback_history
+       WHERE started_at >= ? AND started_at < ?`,
+      startOfToday.toISOString(),
+      endOfToday.toISOString(),
+    );
+    const totalRow = this.getRow('SELECT COUNT(*) AS total, MAX(started_at) AS latest FROM playback_history');
+
+    return {
+      todayCount: Number(todayRow?.count ?? 0),
+      todayPlayedSeconds: Number(todayRow?.played_seconds ?? 0),
+      totalCount: Number(totalRow?.total ?? 0),
+      latestPlayedAt: textOrNull(totalRow?.latest),
+    };
+  }
+
   getTrack(trackId: string): LibraryTrack | null {
     const row = this.getRow(
       `SELECT
@@ -648,15 +968,23 @@ export class LibraryStore {
     }
   }
 
-  refreshAlbums(albumService: AlbumService, now = nowIso()): void {
+  refreshAlbums(
+    albumService: AlbumService,
+    now = nowIso(),
+    options: { albumMergeStrategy?: AlbumMergeStrategy } = {},
+  ): void {
     this.run('DELETE FROM album_tracks');
     this.run('DELETE FROM albums');
 
     const tracks = this.allRows(
-      `SELECT id, path, artist, album, album_artist, year, duration, cover_id, disc_no, track_no, field_sources_json
+      `SELECT
+        tracks.id, tracks.path, tracks.artist, tracks.album, tracks.album_artist,
+        tracks.year, tracks.duration, tracks.cover_id, tracks.disc_no, tracks.track_no,
+        tracks.field_sources_json, covers.source_hash AS cover_source_hash
        FROM tracks
-       WHERE missing = 0
-       ORDER BY album_artist COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE`,
+       LEFT JOIN covers ON covers.id = tracks.cover_id
+       WHERE tracks.missing = 0
+       ORDER BY tracks.album_artist COLLATE NOCASE, tracks.album COLLATE NOCASE, tracks.disc_no, tracks.track_no, tracks.title COLLATE NOCASE`,
     );
 
     const albumIdsByKey = new Map<string, string>();
@@ -689,6 +1017,9 @@ export class LibraryStore {
         year,
         filePath: String(track.path),
         trackId,
+        coverId: textOrNull(track.cover_id),
+        coverSourceHash: textOrNull(track.cover_source_hash),
+        mergeStrategy: options.albumMergeStrategy ?? 'standard',
       });
       const albumId = albumIdsByKey.get(albumKey) ?? randomUUID();
 
@@ -755,12 +1086,17 @@ export class LibraryStore {
     const startedAt = performance.now();
     const { page, pageSize, search, sort } = pageFromQuery(query);
     const offset = (page - 1) * pageSize;
-    const whereSql = search
-      ? "WHERE tracks.missing = 0 AND (tracks.title LIKE ? ESCAPE '\\' OR tracks.artist LIKE ? ESCAPE '\\' OR tracks.album LIKE ? ESCAPE '\\')"
-      : 'WHERE tracks.missing = 0';
-    const searchParams = search ? [likeSearch(search), likeSearch(search), likeSearch(search)] : [];
+    const searchFilter = buildSearchFilter(search, [
+      likePredicate('tracks.title'),
+      likePredicate('tracks.artist'),
+      likePredicate('tracks.album'),
+      likePredicate('tracks.album_artist'),
+      likePredicate('COALESCE(tracks.genre, \'\')'),
+      likePredicate('tracks.path'),
+    ]);
+    const whereSql = searchFilter.sql ? `WHERE tracks.missing = 0 AND ${searchFilter.sql}` : 'WHERE tracks.missing = 0';
     const orderSql = this.trackOrderSql(sort);
-    const totalRow = this.getRow(`SELECT COUNT(*) AS total FROM tracks ${whereSql}`, ...searchParams);
+    const totalRow = this.getRow(`SELECT COUNT(*) AS total FROM tracks ${whereSql}`, ...searchFilter.params);
     const rows = this.allRows(
       `SELECT
         tracks.id, tracks.path, tracks.title, tracks.artist, tracks.album, tracks.album_artist,
@@ -772,7 +1108,7 @@ export class LibraryStore {
       ${whereSql}
       ${orderSql}
       LIMIT ? OFFSET ?`,
-      ...searchParams,
+      ...searchFilter.params,
       pageSize,
       offset,
     );
@@ -795,10 +1131,35 @@ export class LibraryStore {
     const startedAt = performance.now();
     const { page, pageSize, search, sort } = pageFromQuery(query);
     const offset = (page - 1) * pageSize;
-    const whereSql = search ? "WHERE albums.title LIKE ? ESCAPE '\\' OR albums.album_artist LIKE ? ESCAPE '\\'" : '';
-    const searchParams = search ? [likeSearch(search), likeSearch(search)] : [];
+    const searchFilter = buildSearchFilter(search, [
+      likePredicate('albums.title'),
+      likePredicate('albums.album_artist'),
+      likePredicate('COALESCE(CAST(albums.year AS TEXT), \'\')'),
+      (term) => {
+        const value = likeSearch(term);
+
+        return {
+          sql: `EXISTS (
+            SELECT 1
+            FROM album_tracks
+            INNER JOIN tracks ON tracks.id = album_tracks.track_id
+            WHERE album_tracks.album_id = albums.id
+              AND tracks.missing = 0
+              AND (
+                tracks.title LIKE ? ESCAPE '\\'
+                OR tracks.artist LIKE ? ESCAPE '\\'
+                OR tracks.album_artist LIKE ? ESCAPE '\\'
+                OR COALESCE(tracks.genre, '') LIKE ? ESCAPE '\\'
+                OR tracks.path LIKE ? ESCAPE '\\'
+              )
+          )`,
+          params: [value, value, value, value, value],
+        };
+      },
+    ]);
+    const whereSql = searchFilter.sql ? `WHERE ${searchFilter.sql}` : '';
     const orderSql = this.albumOrderSql(sort);
-    const totalRow = this.getRow(`SELECT COUNT(*) AS total FROM albums ${whereSql}`, ...searchParams);
+    const totalRow = this.getRow(`SELECT COUNT(*) AS total FROM albums ${whereSql}`, ...searchFilter.params);
     const rows = this.allRows(
       `SELECT
         albums.id, albums.album_key, albums.title, albums.album_artist, albums.year, albums.track_count,
@@ -807,7 +1168,7 @@ export class LibraryStore {
       ${whereSql}
       ${orderSql}
       LIMIT ? OFFSET ?`,
-      ...searchParams,
+      ...searchFilter.params,
       pageSize,
       offset,
     );
@@ -829,17 +1190,20 @@ export class LibraryStore {
   getArtists(query?: LibraryPageQuery): LibraryPage<LibraryArtist> {
     const { page, pageSize, search, sort } = pageFromQuery(query);
     const offset = (page - 1) * pageSize;
-    const whereSql = search ? "WHERE artists.name LIKE ? ESCAPE '\\'" : '';
-    const searchParams = search ? [likeSearch(search)] : [];
+    const searchFilter = buildSearchFilter(search, [
+      likePredicate('artists.name'),
+      likePredicate('COALESCE(artists.sort_name, \'\')'),
+    ]);
+    const whereSql = searchFilter.sql ? `WHERE ${searchFilter.sql}` : '';
     const orderSql = this.artistOrderSql(sort);
-    const totalRow = this.getRow(`SELECT COUNT(*) AS total FROM artists ${whereSql}`, ...searchParams);
+    const totalRow = this.getRow(`SELECT COUNT(*) AS total FROM artists ${whereSql}`, ...searchFilter.params);
     const rows = this.allRows(
       `SELECT id, name, sort_name, role, track_count, album_count
        FROM artists
        ${whereSql}
        ${orderSql}
        LIMIT ? OFFSET ?`,
-      ...searchParams,
+      ...searchFilter.params,
       pageSize,
       offset,
     );
@@ -847,6 +1211,112 @@ export class LibraryStore {
 
     return {
       items: rows.map((row) => this.mapArtist(row)),
+      page,
+      pageSize,
+      total,
+      hasMore: offset + rows.length < total,
+    };
+  }
+
+  getArtist(artistId: string): LibraryArtist | null {
+    const row = this.getRow(
+      `SELECT id, name, sort_name, role, track_count, album_count
+       FROM artists
+       WHERE id = ?`,
+      artistId,
+    );
+
+    return row ? this.mapArtist(row) : null;
+  }
+
+  getArtistTracks(artistId: string, query?: Pick<LibraryPageQuery, 'page' | 'pageSize' | 'sort'>): LibraryPage<LibraryTrack> {
+    const artist = this.getArtist(artistId);
+    const { page, pageSize, sort } = pageFromQuery(query);
+    const offset = (page - 1) * pageSize;
+
+    if (!artist) {
+      return {
+        items: [],
+        page,
+        pageSize,
+        total: 0,
+        hasMore: false,
+      };
+    }
+
+    const orderSql = this.artistTrackOrderSql(sort);
+    const totalRow = this.getRow(
+      `SELECT COUNT(*) AS total
+       FROM tracks
+       WHERE tracks.missing = 0
+         AND TRIM(tracks.artist) = TRIM(?) COLLATE NOCASE`,
+      artist.name,
+    );
+    const rows = this.allRows(
+      `SELECT
+        tracks.id, tracks.path, tracks.title, tracks.artist, tracks.album, tracks.album_artist,
+        tracks.track_no, tracks.disc_no, tracks.year, tracks.genre,
+        tracks.duration, tracks.codec, tracks.sample_rate, tracks.bit_depth, tracks.bitrate,
+        tracks.cover_id, tracks.metadata_status, tracks.embedded_metadata_status, tracks.embedded_cover_status,
+        tracks.network_metadata_status, tracks.field_sources_json
+      FROM tracks
+      WHERE tracks.missing = 0
+        AND TRIM(tracks.artist) = TRIM(?) COLLATE NOCASE
+      ${orderSql}
+      LIMIT ? OFFSET ?`,
+      artist.name,
+      pageSize,
+      offset,
+    );
+    const total = Number(totalRow?.total ?? 0);
+
+    return {
+      items: rows.map((row) => this.mapTrack(row)),
+      page,
+      pageSize,
+      total,
+      hasMore: offset + rows.length < total,
+    };
+  }
+
+  getArtistAlbums(artistId: string, query?: Pick<LibraryPageQuery, 'page' | 'pageSize' | 'sort'>): LibraryPage<LibraryAlbum> {
+    const artist = this.getArtist(artistId);
+    const { page, pageSize, sort } = pageFromQuery(query);
+    const offset = (page - 1) * pageSize;
+
+    if (!artist) {
+      return {
+        items: [],
+        page,
+        pageSize,
+        total: 0,
+        hasMore: false,
+      };
+    }
+
+    const orderSql = this.albumOrderSql(sort);
+    const totalRow = this.getRow(
+      `SELECT COUNT(*) AS total
+       FROM albums
+       WHERE TRIM(albums.album_artist) = TRIM(?) COLLATE NOCASE`,
+      artist.name,
+    );
+    const rows = this.allRows(
+      `SELECT
+        albums.id, albums.album_key, albums.title, albums.album_artist, albums.year, albums.track_count,
+        albums.duration, albums.cover_id
+      FROM albums
+      WHERE TRIM(albums.album_artist) = TRIM(?) COLLATE NOCASE
+      ${orderSql}
+      LIMIT ? OFFSET ?`,
+      artist.name,
+      pageSize,
+      offset,
+    );
+    const total = Number(totalRow?.total ?? 0);
+
+    return {
+      items: rows.map((row) => this.mapAlbum(row)),
       page,
       pageSize,
       total,
@@ -970,6 +1440,19 @@ export class LibraryStore {
     return Number.isFinite(value) && value > 0 ? value : null;
   }
 
+  private getPlaybackHistoryEntry(id: string): PlaybackHistoryEntry | null {
+    const row = this.getRow('SELECT * FROM playback_history WHERE id = ?', id);
+    return row ? this.mapPlaybackHistoryEntry(row) : null;
+  }
+
+  private isPlaybackCompleted(playedSeconds: number, durationSeconds: number): boolean {
+    if (durationSeconds <= 0) {
+      return playedSeconds >= 30;
+    }
+
+    return playedSeconds >= 30 || playedSeconds >= durationSeconds * 0.5;
+  }
+
   private trackOrderSql(sort: string): string {
     switch (sort) {
       case 'artist':
@@ -1001,6 +1484,29 @@ export class LibraryStore {
       case 'title':
       default:
         return 'ORDER BY tracks.title COLLATE NOCASE, tracks.artist COLLATE NOCASE';
+    }
+  }
+
+  private artistTrackOrderSql(sort: string): string {
+    switch (sort) {
+      case 'recent':
+        return 'ORDER BY COALESCE(tracks.last_played_at, tracks.updated_at) DESC, tracks.title COLLATE NOCASE';
+      case 'frequent':
+        return 'ORDER BY COALESCE(tracks.play_count, 0) DESC, tracks.last_played_at DESC, tracks.title COLLATE NOCASE';
+      case 'titleAsc':
+      case 'title':
+        return 'ORDER BY tracks.title COLLATE NOCASE, tracks.album COLLATE NOCASE';
+      case 'titleDesc':
+        return 'ORDER BY tracks.title COLLATE NOCASE DESC, tracks.album COLLATE NOCASE';
+      case 'durationAsc':
+        return 'ORDER BY tracks.duration ASC, tracks.title COLLATE NOCASE';
+      case 'durationDesc':
+        return 'ORDER BY tracks.duration DESC, tracks.title COLLATE NOCASE';
+      case 'random':
+        return 'ORDER BY RANDOM()';
+      case 'default':
+      default:
+        return 'ORDER BY tracks.album COLLATE NOCASE, COALESCE(tracks.disc_no, 0), COALESCE(tracks.track_no, 0), tracks.title COLLATE NOCASE';
     }
   }
 
@@ -1060,6 +1566,31 @@ export class LibraryStore {
       status: Number(row.enabled ?? 1) === 0 || row.status === 'removed' ? 'removed' : 'active',
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapPlaybackHistoryEntry(row: DbRow): PlaybackHistoryEntry {
+    const coverId = textOrNull(row.cover_id);
+
+    return {
+      id: String(row.id),
+      trackId: textOrNull(row.track_id),
+      trackPath: String(row.track_path),
+      title: String(row.title),
+      artist: String(row.artist),
+      album: String(row.album ?? ''),
+      albumArtist: String(row.album_artist ?? ''),
+      coverId,
+      coverThumb: coverId ? this.toCoverUrl(coverId, 'thumb') : null,
+      startedAt: String(row.started_at),
+      endedAt: textOrNull(row.ended_at),
+      playedSeconds: Number(row.history_played_seconds_total ?? row.played_seconds ?? 0),
+      durationSeconds: Number(row.duration_seconds ?? 0),
+      playCount: Number(row.history_play_count ?? 1),
+      completed: Number(row.completed_count ?? row.completed ?? 0) > 0,
+      sourceType: textOrNull(row.source_type),
+      sourceLabel: textOrNull(row.source_label),
+      queueId: textOrNull(row.queue_id),
     };
   }
 

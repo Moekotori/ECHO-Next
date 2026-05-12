@@ -34,6 +34,51 @@ std::string getString(const juce::DynamicObject& object, const juce::Identifier&
     const auto value = object.getProperty(key);
     return value.isString() ? value.toString().toStdString() : std::string();
 }
+
+ChannelBalanceMonoMode parseMonoMode(const std::string& value, ChannelBalanceMonoMode fallback)
+{
+    if (value == "sum")
+        return ChannelBalanceMonoMode::SumToMono;
+
+    if (value == "left")
+        return ChannelBalanceMonoMode::LeftOnly;
+
+    if (value == "right")
+        return ChannelBalanceMonoMode::RightOnly;
+
+    if (value == "off")
+        return ChannelBalanceMonoMode::Off;
+
+    return fallback;
+}
+
+std::string monoModeText(ChannelBalanceMonoMode mode)
+{
+    switch (mode)
+    {
+        case ChannelBalanceMonoMode::SumToMono: return "sum";
+        case ChannelBalanceMonoMode::LeftOnly: return "left";
+        case ChannelBalanceMonoMode::RightOnly: return "right";
+        case ChannelBalanceMonoMode::Off:
+        default: return "off";
+    }
+}
+
+ChannelBalanceState readChannelBalanceState(const juce::DynamicObject& object, const ChannelBalanceState& fallback)
+{
+    ChannelBalanceState state = fallback;
+    state.enabled = getBool(object, "enabled", state.enabled);
+    state.balance = clampChannelBalance(getNumber(object, "balance", state.balance));
+    state.leftGainDb = clampChannelGainDb(getNumber(object, "leftGainDb", state.leftGainDb));
+    state.rightGainDb = clampChannelGainDb(getNumber(object, "rightGainDb", state.rightGainDb));
+    state.swapLeftRight = getBool(object, "swapLeftRight", state.swapLeftRight);
+    state.monoMode = parseMonoMode(getString(object, "monoMode"), state.monoMode);
+    state.invertLeft = getBool(object, "invertLeft", state.invertLeft);
+    state.invertRight = getBool(object, "invertRight", state.invertRight);
+    state.constantPower = getBool(object, "constantPower", state.constantPower);
+    return state;
+}
+
 } // namespace
 
 std::string EqMessageProtocol::createStateMessage(const EqProcessor& processor)
@@ -61,7 +106,30 @@ std::string EqMessageProtocol::createStateMessage(const EqProcessor& processor)
     return output.str();
 }
 
-std::string EqMessageProtocol::handleJsonLine(const std::string& line, EqProcessor& processor)
+std::string EqMessageProtocol::createChannelBalanceStateMessage(const ChannelBalanceProcessor& processor)
+{
+    const auto state = processor.getState();
+    std::ostringstream output;
+    output << "{\"type\":\"channelBalance:state\","
+           << "\"ok\":true,"
+           << "\"enabled\":" << boolText(state.enabled) << ','
+           << "\"balance\":" << state.balance << ','
+           << "\"leftGainDb\":" << state.leftGainDb << ','
+           << "\"rightGainDb\":" << state.rightGainDb << ','
+           << "\"swapLeftRight\":" << boolText(state.swapLeftRight) << ','
+           << "\"monoMode\":\"" << monoModeText(state.monoMode) << "\","
+           << "\"invertLeft\":" << boolText(state.invertLeft) << ','
+           << "\"invertRight\":" << boolText(state.invertRight) << ','
+           << "\"constantPower\":" << boolText(state.constantPower) << ','
+           << "\"clippingRisk\":" << boolText(processor.hasClippingRisk())
+           << "}";
+    return output.str();
+}
+
+std::string EqMessageProtocol::handleJsonLine(
+    const std::string& line,
+    EqProcessor& processor,
+    ChannelBalanceProcessor& channelBalanceProcessor)
 {
     const auto parsed = juce::JSON::parse(juce::String::fromUTF8(line.data(), static_cast<int>(line.size())));
     const auto* object = parsed.getDynamicObject();
@@ -73,6 +141,26 @@ std::string EqMessageProtocol::handleJsonLine(const std::string& line, EqProcess
 
     if (type == "eq:get-state")
         return createStateMessage(processor);
+
+    if (type == "channelBalance.getState" || type == "channelBalance:get-state")
+        return createChannelBalanceStateMessage(channelBalanceProcessor);
+
+    if (type == "channelBalance.setState" || type == "channelBalance:set-state")
+    {
+        const auto stateValue = object->getProperty("state");
+        const auto* stateObject = stateValue.getDynamicObject();
+        const auto nextState = stateObject != nullptr
+            ? readChannelBalanceState(*stateObject, channelBalanceProcessor.getState())
+            : readChannelBalanceState(*object, channelBalanceProcessor.getState());
+        channelBalanceProcessor.setState(nextState);
+        return createChannelBalanceStateMessage(channelBalanceProcessor);
+    }
+
+    if (type == "channelBalance.reset" || type == "channelBalance:reset")
+    {
+        channelBalanceProcessor.resetToDefault();
+        return createChannelBalanceStateMessage(channelBalanceProcessor);
+    }
 
     if (type == "eq:set-enabled")
     {

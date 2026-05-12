@@ -3,6 +3,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { dirname, join } from 'node:path';
 import electron from 'electron';
+import type { ChannelBalanceMonoMode, ChannelBalanceState } from '../../shared/types/audio';
+import {
+  channelBalanceMaxBalance,
+  channelBalanceMaxGainDb,
+  channelBalanceMinBalance,
+  channelBalanceMinGainDb,
+} from '../../shared/types/audio';
 import type { EqBand, EqPreset, EqSavePresetRequest, EqSetBandFrequencyRequest, EqSetBandGainRequest, EqState } from '../../shared/types/eq';
 import {
   eqBandCount,
@@ -14,9 +21,10 @@ import {
   eqMinGainDb,
   eqMinPreampDb,
 } from '../../shared/types/eq';
+import { defaultChannelBalanceSettings, getAppSettings, setAppSettings } from '../app/appSettings';
 
 type PendingRequest = {
-  resolve: (state: EqState) => void;
+  resolve: (state: EqState | ChannelBalanceState) => void;
   reject: (error: Error) => void;
 };
 
@@ -55,6 +63,36 @@ const defaultState = (): EqState => ({
   presetName: 'Flat',
   clippingRisk: false,
 });
+
+const monoModes = new Set<ChannelBalanceMonoMode>(['off', 'sum', 'left', 'right']);
+
+const defaultChannelBalanceState = (): ChannelBalanceState => ({
+  ...defaultChannelBalanceSettings,
+  clippingRisk: false,
+});
+
+const normalizeChannelBalancePatch = (
+  patch: Partial<ChannelBalanceState>,
+  fallback: ChannelBalanceState,
+): ChannelBalanceState => {
+  const balance = Number(patch.balance ?? fallback.balance);
+  const leftGainDb = Number(patch.leftGainDb ?? fallback.leftGainDb);
+  const rightGainDb = Number(patch.rightGainDb ?? fallback.rightGainDb);
+  const monoMode = typeof patch.monoMode === 'string' && monoModes.has(patch.monoMode) ? patch.monoMode : fallback.monoMode;
+
+  return {
+    enabled: typeof patch.enabled === 'boolean' ? patch.enabled : fallback.enabled,
+    balance: Number.isFinite(balance) ? clamp(balance, channelBalanceMinBalance, channelBalanceMaxBalance) : fallback.balance,
+    leftGainDb: Number.isFinite(leftGainDb) ? clamp(leftGainDb, channelBalanceMinGainDb, channelBalanceMaxGainDb) : fallback.leftGainDb,
+    rightGainDb: Number.isFinite(rightGainDb) ? clamp(rightGainDb, channelBalanceMinGainDb, channelBalanceMaxGainDb) : fallback.rightGainDb,
+    swapLeftRight: typeof patch.swapLeftRight === 'boolean' ? patch.swapLeftRight : fallback.swapLeftRight,
+    monoMode,
+    invertLeft: typeof patch.invertLeft === 'boolean' ? patch.invertLeft : fallback.invertLeft,
+    invertRight: typeof patch.invertRight === 'boolean' ? patch.invertRight : fallback.invertRight,
+    constantPower: typeof patch.constantPower === 'boolean' ? patch.constantPower : fallback.constantPower,
+    clippingRisk: typeof patch.clippingRisk === 'boolean' ? patch.clippingRisk : fallback.clippingRisk,
+  };
+};
 
 const getUserDataPath = (): string => {
   const app = (electron as unknown as { app?: { getPath: (name: string) => string } }).app;
@@ -137,6 +175,7 @@ const normalizePreset = (value: unknown, readonlyFallback = false): EqPreset | n
 
 export class EqBridge extends EventEmitter {
   private state: EqState = defaultState();
+  private channelBalanceState: ChannelBalanceState = defaultChannelBalanceState();
   private socket: net.Socket | null = null;
   private pending: PendingRequest[] = [];
   private receiveBuffer = '';
@@ -145,6 +184,11 @@ export class EqBridge extends EventEmitter {
   constructor(userDataPath = getUserDataPath()) {
     super();
     this.presetPath = join(userDataPath, 'eq-presets.json');
+    try {
+      this.channelBalanceState = normalizeChannelBalancePatch(getAppSettings().channelBalance, defaultChannelBalanceState());
+    } catch {
+      this.channelBalanceState = defaultChannelBalanceState();
+    }
     this.on('error', () => undefined);
   }
 
@@ -203,6 +247,10 @@ export class EqBridge extends EventEmitter {
       ...this.state,
       bands: this.state.bands.map((band) => ({ ...band })),
     };
+  }
+
+  getChannelBalanceState(): ChannelBalanceState {
+    return { ...this.channelBalanceState };
   }
 
   listPresets(): EqPreset[] {
@@ -287,6 +335,20 @@ export class EqBridge extends EventEmitter {
     return this.emitState();
   }
 
+  async setChannelBalanceState(patch: Partial<ChannelBalanceState>): Promise<ChannelBalanceState> {
+    this.channelBalanceState = normalizeChannelBalancePatch(patch, this.channelBalanceState);
+    this.persistChannelBalanceState();
+    await this.sendNativeChannelBalance({ type: 'channelBalance.setState', state: this.channelBalanceState });
+    return this.emitChannelBalanceState();
+  }
+
+  async resetChannelBalance(): Promise<ChannelBalanceState> {
+    this.channelBalanceState = defaultChannelBalanceState();
+    this.persistChannelBalanceState();
+    await this.sendNativeChannelBalance({ type: 'channelBalance.reset' });
+    return this.emitChannelBalanceState();
+  }
+
   savePreset(request: EqSavePresetRequest): EqPreset {
     const normalized = normalizePreset({
       id: request.id ?? sanitizePresetId(request.name),
@@ -337,6 +399,7 @@ export class EqBridge extends EventEmitter {
   private async syncStateToNative(): Promise<void> {
     await this.sendNative({ type: 'eq:set-enabled', enabled: this.state.enabled });
     await this.sendNative({ type: 'eq:set-preset', preampDb: this.state.preampDb, bands: this.state.bands });
+    await this.sendNativeChannelBalance({ type: 'channelBalance.setState', state: this.channelBalanceState });
   }
 
   private async sendNative(message: Record<string, unknown>): Promise<EqState> {
@@ -347,7 +410,25 @@ export class EqBridge extends EventEmitter {
     }
 
     return new Promise<EqState>((resolve, reject) => {
-      this.pending.push({ resolve, reject });
+      this.pending.push({ resolve: (state) => resolve(state as EqState), reject });
+      socket.write(`${JSON.stringify(message)}\n`, (error) => {
+        if (error) {
+          const pending = this.pending.shift();
+          pending?.reject(error);
+        }
+      });
+    });
+  }
+
+  private async sendNativeChannelBalance(message: Record<string, unknown>): Promise<ChannelBalanceState> {
+    const socket = this.socket;
+
+    if (!socket || socket.destroyed || !socket.writable) {
+      return this.getChannelBalanceState();
+    }
+
+    return new Promise<ChannelBalanceState>((resolve, reject) => {
+      this.pending.push({ resolve: (state) => resolve(state as ChannelBalanceState), reject });
       socket.write(`${JSON.stringify(message)}\n`, (error) => {
         if (error) {
           const pending = this.pending.shift();
@@ -378,7 +459,7 @@ export class EqBridge extends EventEmitter {
     }
 
     try {
-      const message = JSON.parse(line) as Partial<EqState> & { type?: string; message?: string };
+      const message = JSON.parse(line) as Partial<EqState & ChannelBalanceState> & { type?: string; message?: string };
 
       if (message.type === 'eq:error') {
         pending?.reject(new Error(message.message ?? 'eq_native_error'));
@@ -396,7 +477,12 @@ export class EqBridge extends EventEmitter {
         this.emitState();
       }
 
-      pending?.resolve(this.getState());
+      if (message.type === 'channelBalance:state') {
+        this.channelBalanceState = normalizeChannelBalancePatch(message, this.channelBalanceState);
+        this.emitChannelBalanceState();
+      }
+
+      pending?.resolve(message.type === 'channelBalance:state' ? this.getChannelBalanceState() : this.getState());
     } catch (error) {
       pending?.reject(error instanceof Error ? error : new Error(String(error)));
     }
@@ -406,6 +492,20 @@ export class EqBridge extends EventEmitter {
     const state = this.getState();
     this.emit('state', state);
     return state;
+  }
+
+  private emitChannelBalanceState(): ChannelBalanceState {
+    const state = this.getChannelBalanceState();
+    this.emit('channelBalanceState', state);
+    return state;
+  }
+
+  private persistChannelBalanceState(): void {
+    try {
+      setAppSettings({ channelBalance: this.channelBalanceState });
+    } catch {
+      // Tests and early startup can run without a ready Electron app path.
+    }
   }
 
   private rejectPending(error: Error): void {

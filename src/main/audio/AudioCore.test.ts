@@ -99,6 +99,7 @@ class FakeBridge extends EventEmitter {
 
   async start(options: NativeOutputStartOptions) {
     this.startOptions = options;
+    this.positionSeconds = options.startSeconds ?? 0;
     const actualDeviceSampleRate = this.readySampleRate ?? options.requestedOutputSampleRate;
 
     return {
@@ -510,7 +511,7 @@ describe('Audio Core sample-rate regression guard', () => {
     });
   });
 
-  it('pause preserves the active native host and current position', async () => {
+  it('pause keeps the native host warm and preserves current position', async () => {
     const { bridges, session } = createSessionHarness([probe('song.flac', 44100)]);
 
     await session.playLocalFile({ filePath: 'song.flac', output: { outputMode: 'shared' } });
@@ -522,8 +523,8 @@ describe('Audio Core sample-rate regression guard', () => {
     expect(bridges[0].stop).not.toHaveBeenCalled();
   });
 
-  it('play resumes a paused file from the paused position', async () => {
-    const { bridges, session } = createSessionHarness([probe('song.flac', 44100)]);
+  it('play resumes a paused file from the paused position without reopening output', async () => {
+    const { bridges, decoder, session } = createSessionHarness([probe('song.flac', 44100)]);
 
     await session.playLocalFile({ filePath: 'song.flac', output: { outputMode: 'shared' } });
     bridges[0].positionSeconds = 18.25;
@@ -533,6 +534,9 @@ describe('Audio Core sample-rate regression guard', () => {
     expect(status.state).toBe('playing');
     expect(bridges).toHaveLength(1);
     expect(bridges[0].stop).not.toHaveBeenCalled();
+    expect(bridges[0].positionSeconds).toBe(18.25);
+    expect(decoder.probeRequests).toEqual(['song.flac']);
+    expect(decoder.decodeRequests.at(-1)).toMatchObject({ startSeconds: 18.25 });
   });
 
   it('seek while paused moves the stored position without starting playback', async () => {
@@ -546,10 +550,10 @@ describe('Audio Core sample-rate regression guard', () => {
     expect(pausedStatus.state).toBe('paused');
     expect(pausedStatus.positionSeconds).toBe(33);
     expect(bridges).toHaveLength(1);
+    expect(bridges[0].stop).not.toHaveBeenCalled();
 
     await session.play();
     expect(bridges).toHaveLength(1);
-    expect(bridges[0].stop).not.toHaveBeenCalled();
     expect(session.getStatus().positionSeconds).toBe(33);
   });
 

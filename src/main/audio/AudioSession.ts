@@ -153,6 +153,7 @@ const defaultStatus = (nativeHostAvailable: boolean): AudioStatus => ({
   bitPerfectCandidate: false,
   sampleRateMismatch: false,
   eqEnabled: false,
+  channelBalanceEnabled: false,
   dspActive: false,
   preampDb: 0,
   eqPresetName: 'Flat',
@@ -497,6 +498,7 @@ export class AudioSession extends EventEmitter {
         trackId: this.currentTrackId ?? undefined,
         startSeconds: this.pausedPositionSeconds ?? this.clock.getPositionSeconds(),
         output: this.currentOutputSettings,
+        probe: this.currentProbe ? createProbeHint(this.currentProbe) : undefined,
       });
     }
 
@@ -600,8 +602,9 @@ export class AudioSession extends EventEmitter {
     const status = defaultStatus(this.isNativeHostAvailable());
     const plan = this.currentPlan;
     const eqState = getEqBridge().getState();
-    const dspActive = eqState.enabled;
-    const bitPerfectDisabledReason = dspActive ? 'eq_enabled' : null;
+    const channelBalanceState = getEqBridge().getChannelBalanceState();
+    const dspActive = eqState.enabled || channelBalanceState.enabled;
+    const bitPerfectDisabledReason = dspActive ? (eqState.enabled ? 'eq_enabled' : 'channel_balance_enabled') : null;
     const warnings = [...(plan?.warnings ?? [])];
     for (const warning of this.outputWarnings) {
       if (!warnings.includes(warning)) {
@@ -610,11 +613,11 @@ export class AudioSession extends EventEmitter {
     }
 
     if (dspActive) {
-      warnings.push('eq_enabled_bit_perfect_disabled');
+      warnings.push(eqState.enabled ? 'eq_enabled_bit_perfect_disabled' : 'channel_balance_bit_perfect_disabled');
     }
 
-    if (eqState.clippingRisk) {
-      warnings.push('eq_clipping_risk');
+    if (eqState.clippingRisk || channelBalanceState.clippingRisk) {
+      warnings.push(eqState.clippingRisk ? 'eq_clipping_risk' : 'channel_balance_clipping_risk');
     }
 
     return {
@@ -646,10 +649,11 @@ export class AudioSession extends EventEmitter {
       bitPerfectCandidate: (plan?.bitPerfectCandidate ?? false) && !dspActive,
       sampleRateMismatch: plan?.sampleRateMismatch ?? false,
       eqEnabled: eqState.enabled,
+      channelBalanceEnabled: channelBalanceState.enabled,
       dspActive,
       preampDb: eqState.preampDb,
       eqPresetName: eqState.presetName,
-      clippingRisk: eqState.clippingRisk,
+      clippingRisk: eqState.clippingRisk || Boolean(channelBalanceState.clippingRisk),
       bitPerfectDisabledReason,
       warnings,
       error: this.errorMessage,

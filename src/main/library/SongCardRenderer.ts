@@ -16,11 +16,16 @@ export type SongCardRenderResult = {
 const width = 1920;
 const height = 1080;
 const outerRadius = 70;
-const coverSize = 600;
-const coverX = 86;
-const coverY = 86;
-const textX = 746;
-const textMaxWidth = 1050;
+const coverSize = 690;
+const coverX = 112;
+const coverY = 194;
+const coverRadius = 54;
+const panelX = 742;
+const panelY = 154;
+const panelWidth = 1066;
+const panelHeight = 760;
+const textX = 838;
+const textMaxWidth = 850;
 const textAverageWidthRatio = 0.62;
 const defaultCoverBuffer = Buffer.from(defaultCoverSvg);
 
@@ -54,7 +59,7 @@ const fitText = (value: string, fontSize: number, maxWidth: number): string => {
     return value;
   }
 
-  return `${chars.slice(0, Math.max(1, maxChars - 1)).join('')}…`;
+  return `${chars.slice(0, Math.max(1, maxChars - 3)).join('')}...`;
 };
 
 const titleSizeFor = (value: string): number => {
@@ -77,11 +82,11 @@ const textSvg = (track: SongCardRenderInput['track']): Buffer => {
   const album = cleanText(track.album, 'Unknown Album');
   const titleSize = titleSizeFor(title);
   const fittedTitle = fitText(title, titleSize, textMaxWidth);
-  const fittedArtist = fitText(artist, 84, textMaxWidth);
-  const fittedAlbum = fitText(album, 56, textMaxWidth);
-  const titleY = titleSize >= 100 ? 445 : 430;
-  const artistY = titleY + 134;
-  const albumY = artistY + 126;
+  const fittedArtist = fitText(artist, 72, textMaxWidth);
+  const fittedAlbum = fitText(album, 50, textMaxWidth);
+  const titleY = titleSize >= 100 ? 446 : 430;
+  const artistY = titleY + 118;
+  const albumY = artistY + 98;
 
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <defs>
@@ -89,17 +94,17 @@ const textSvg = (track: SongCardRenderInput['track']): Buffer => {
       <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#020711" flood-opacity="0.34"/>
     </filter>
   </defs>
-  <rect x="0" y="0" width="${width}" height="${height}" rx="${outerRadius}" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1.5"/>
-  <text x="${textX}" y="265" fill="rgba(246,248,255,0.92)" font-family="Inter, Microsoft YaHei, Segoe UI, Arial, sans-serif" font-size="56" font-weight="800" letter-spacing="12">ECHO</text>
+  <rect x="0" y="0" width="${width}" height="${height}" rx="${outerRadius}" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+  <text x="${textX}" y="266" fill="#f6f8ff" fill-opacity="0.82" font-family="Inter, Microsoft YaHei, Segoe UI, Arial, sans-serif" font-size="46" font-weight="800" letter-spacing="10">ECHO NEXT</text>
   <text x="${textX}" y="${titleY}" fill="#f7f8ff" font-family="Inter, Microsoft YaHei, Segoe UI, Arial, sans-serif" font-size="${titleSize}" font-weight="900" filter="url(#soft-shadow)">${escapeXml(fittedTitle)}</text>
-  <text x="${textX}" y="${artistY}" fill="rgba(246,248,255,0.94)" font-family="Inter, Microsoft YaHei, Segoe UI, Arial, sans-serif" font-size="84" font-weight="850">${escapeXml(fittedArtist)}</text>
-  <text x="${textX}" y="${albumY}" fill="rgba(246,248,255,0.72)" font-family="Inter, Microsoft YaHei, Segoe UI, Arial, sans-serif" font-size="56" font-weight="760">${escapeXml(fittedAlbum)}</text>
-  <line x1="${textX}" y1="770" x2="1834" y2="770" stroke="rgba(255,255,255,0.16)" stroke-width="2"/>
-  <g font-family="Inter, Microsoft YaHei, Segoe UI, Arial, sans-serif" font-size="36" font-weight="850" fill="#f6f8ff">
-    <rect x="${textX}" y="808" width="267" height="68" rx="34" fill="rgba(255,255,255,0.11)" stroke="rgba(255,255,255,0.24)" stroke-width="1.5"/>
-    <text x="${textX + 34}" y="856">Hi-Fi Player</text>
-    <rect x="${textX + 288}" y="808" width="276" height="68" rx="34" fill="rgba(255,255,255,0.11)" stroke="rgba(255,255,255,0.24)" stroke-width="1.5"/>
-    <text x="${textX + 322}" y="856">Now Playing</text>
+  <text x="${textX}" y="${artistY}" fill="#f6f8ff" fill-opacity="0.94" font-family="Inter, Microsoft YaHei, Segoe UI, Arial, sans-serif" font-size="72" font-weight="800">${escapeXml(fittedArtist)}</text>
+  <text x="${textX}" y="${albumY}" fill="#f6f8ff" fill-opacity="0.68" font-family="Inter, Microsoft YaHei, Segoe UI, Arial, sans-serif" font-size="50" font-weight="700">${escapeXml(fittedAlbum)}</text>
+  <line x1="${textX}" y1="738" x2="1698" y2="738" stroke="#ffffff" stroke-opacity="0.18" stroke-width="2"/>
+  <g font-family="Inter, Microsoft YaHei, Segoe UI, Arial, sans-serif" font-size="34" font-weight="800" fill="#f6f8ff">
+    <rect x="${textX}" y="784" width="236" height="68" rx="34" fill="#ffffff" fill-opacity="0.13" stroke="#ffffff" stroke-opacity="0.24" stroke-width="1.5"/>
+    <text x="${textX + 34}" y="831">Song Card</text>
+    <rect x="${textX + 260}" y="784" width="270" height="68" rx="34" fill="#ffffff" fill-opacity="0.13" stroke="#ffffff" stroke-opacity="0.24" stroke-width="1.5"/>
+    <text x="${textX + 294}" y="831">Now Playing</text>
   </g>
 </svg>`);
 };
@@ -113,10 +118,26 @@ const coverShadowSvg = (): Buffer =>
   Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <defs>
     <filter id="cover-shadow" x="-35%" y="-35%" width="170%" height="170%">
-      <feDropShadow dx="0" dy="28" stdDeviation="26" flood-color="#020814" flood-opacity="0.42"/>
+      <feDropShadow dx="0" dy="32" stdDeviation="30" flood-color="#020814" flood-opacity="0.48"/>
     </filter>
   </defs>
-  <rect x="${coverX}" y="${coverY}" width="${coverSize}" height="${coverSize}" rx="46" fill="rgba(10,18,34,0.58)" stroke="rgba(255,255,255,0.18)" stroke-width="1.5" filter="url(#cover-shadow)"/>
+  <rect x="${coverX}" y="${coverY}" width="${coverSize}" height="${coverSize}" rx="${coverRadius}" fill="#0a1222" fill-opacity="0.58" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5" filter="url(#cover-shadow)"/>
+</svg>`);
+
+const panelSvg = (): Buffer =>
+  Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.23"/>
+      <stop offset="0.46" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#0c1628" stop-opacity="0.36"/>
+    </linearGradient>
+    <filter id="panel-shadow" x="-18%" y="-18%" width="136%" height="136%">
+      <feDropShadow dx="0" dy="30" stdDeviation="36" flood-color="#020711" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <rect x="${panelX}" y="${panelY}" width="${panelWidth}" height="${panelHeight}" rx="58" fill="url(#panel)" stroke="#ffffff" stroke-opacity="0.22" stroke-width="1.5" filter="url(#panel-shadow)"/>
+  <rect x="${panelX + 34}" y="${panelY + 34}" width="${panelWidth - 68}" height="${panelHeight - 68}" rx="44" fill="#08101e" fill-opacity="0.16" stroke="#ffffff" stroke-opacity="0.09" stroke-width="1"/>
 </svg>`);
 
 const overlaySvg = (): Buffer =>
@@ -150,16 +171,20 @@ export class SongCardRenderer {
     const foregroundCover = await sharp(coverInput, { animated: false })
       .rotate()
       .resize(coverSize, coverSize, { fit: 'cover', position: 'centre' })
-      .composite([{ input: roundedRectMask(coverSize, coverSize, 46), blend: 'dest-in' }])
+      .composite([{ input: roundedRectMask(coverSize, coverSize, coverRadius), blend: 'dest-in' }])
       .png()
       .toBuffer();
-    const card = await sharp(background)
+    const composedCard = await sharp(background)
       .composite([
         { input: overlaySvg(), left: 0, top: 0 },
+        { input: panelSvg(), left: 0, top: 0 },
         { input: coverShadowSvg(), left: 0, top: 0 },
         { input: foregroundCover, left: coverX, top: coverY },
         { input: textSvg(input.track), left: 0, top: 0 },
       ])
+      .png()
+      .toBuffer();
+    const card = await sharp(composedCard)
       .composite([{ input: roundedRectMask(width, height, outerRadius), blend: 'dest-in' }])
       .png()
       .toBuffer();

@@ -69,4 +69,51 @@ describe('EqBridge protocol validation', () => {
     const reloaded = new EqBridge(dir);
     expect(reloaded.listPresets().some((preset) => preset.name === 'Desk Headphones')).toBe(true);
   });
+
+  it('clamps channel balance parameters before updating state', async () => {
+    const bridge = createBridge();
+
+    await bridge.setChannelBalanceState({
+      enabled: true,
+      balance: 5,
+      leftGainDb: -80,
+      rightGainDb: 12,
+      monoMode: 'sum',
+      constantPower: false,
+    });
+
+    expect(bridge.getChannelBalanceState()).toMatchObject({
+      enabled: true,
+      balance: 1,
+      leftGainDb: -12,
+      rightGainDb: 6,
+      monoMode: 'sum',
+      constantPower: false,
+    });
+  });
+
+  it('resets channel balance to a transparent default', async () => {
+    const bridge = createBridge();
+
+    await bridge.setChannelBalanceState({
+      enabled: true,
+      balance: -0.5,
+      swapLeftRight: true,
+      monoMode: 'left',
+      invertRight: true,
+    });
+    await bridge.resetChannelBalance();
+
+    expect(bridge.getChannelBalanceState()).toMatchObject({
+      enabled: false,
+      balance: 0,
+      leftGainDb: 0,
+      rightGainDb: 0,
+      swapLeftRight: false,
+      monoMode: 'off',
+      invertLeft: false,
+      invertRight: false,
+      constantPower: true,
+    });
+  });
 });

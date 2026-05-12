@@ -9,10 +9,11 @@ type TrackListProps = {
   canLoadMore?: boolean;
   onEndReached?: () => void;
   onPlay?: (track: LibraryTrack) => void;
+  onAddToQueue?: (track: LibraryTrack) => void;
   onOpenTrackMenu?: (track: LibraryTrack, position: { x: number; y: number }) => void;
 };
 
-export const TrackList = memo(({ tracks, currentTrackId, canLoadMore = false, onEndReached, onPlay, onOpenTrackMenu }: TrackListProps): JSX.Element => {
+export const TrackList = memo(({ tracks, currentTrackId, canLoadMore = false, onEndReached, onPlay, onAddToQueue, onOpenTrackMenu }: TrackListProps): JSX.Element => {
   const scrollParentRef = useRef<HTMLDivElement | null>(null);
   const rowVirtualizer = useVirtualizer({
     count: tracks.length,
@@ -53,7 +54,7 @@ export const TrackList = memo(({ tracks, currentTrackId, canLoadMore = false, on
                   data-index={virtualRow.index}
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
-                  <TrackRow isPlaying={track.id === currentTrackId} track={track} onPlay={onPlay} onOpenMenu={onOpenTrackMenu} />
+                  <TrackRow isPlaying={track.id === currentTrackId} track={track} onPlay={onPlay} onAddToQueue={onAddToQueue} onOpenMenu={onOpenTrackMenu} />
                 </div>
               );
             })}

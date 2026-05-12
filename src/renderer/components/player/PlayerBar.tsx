@@ -80,6 +80,10 @@ export const PlayerBar = ({ onOpenAudioSettings }: PlayerBarProps): JSX.Element 
   const title = currentTrack?.title ?? titleFromPath(filePath);
   const artist = currentTrack?.artist || currentTrack?.albumArtist || (filePath ? 'Local file' : 'Ready');
 
+  useEffect(() => {
+    queue.syncPlaybackState(state);
+  }, [queue, state]);
+
   const runPlaybackAction = useCallback(
     async (action: () => Promise<PlaybackStatus | null>): Promise<void> => {
       try {
@@ -87,6 +91,18 @@ export const PlayerBar = ({ onOpenAudioSettings }: PlayerBarProps): JSX.Element 
         const status = await action();
         if (status) {
           setPlaybackStatus(status);
+          setAudioStatus((current) =>
+            current
+              ? {
+                  ...current,
+                  state: status.state,
+                  currentTrackId: status.currentTrackId,
+                  currentFilePath: status.filePath,
+                  positionSeconds: status.positionMs / 1000,
+                  durationSeconds: status.durationMs / 1000,
+                }
+              : current,
+          );
           setQueueCurrentTrackId(status.currentTrackId);
         }
         await refreshStatus();
@@ -115,6 +131,14 @@ export const PlayerBar = ({ onOpenAudioSettings }: PlayerBarProps): JSX.Element 
   const handleNext = useCallback((): void => {
     void runPlaybackAction(queue.playNext);
   }, [queue.playNext, runPlaybackAction]);
+
+  const handleCycleRepeatMode = useCallback((): void => {
+    queue.setRepeatMode(queue.repeatMode === 'off' ? 'all' : queue.repeatMode === 'all' ? 'one' : 'off');
+  }, [queue]);
+
+  const handleOpenQueue = useCallback((): void => {
+    window.dispatchEvent(new Event('app:navigate:queue'));
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -204,9 +228,12 @@ export const PlayerBar = ({ onOpenAudioSettings }: PlayerBarProps): JSX.Element 
           canGoPrevious={queue.canGoPrevious}
           isPlaying={isPlaying}
           isShuffleEnabled={queue.isShuffleEnabled}
+          repeatMode={queue.repeatMode}
           onNext={handleNext}
           onPlayPause={() => void handlePlayPause()}
           onPrevious={handlePrevious}
+          onCycleRepeatMode={handleCycleRepeatMode}
+          onOpenQueue={handleOpenQueue}
           onToggleShuffle={queue.toggleShuffle}
         />
         <PlayerProgress

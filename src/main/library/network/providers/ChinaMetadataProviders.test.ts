@@ -59,8 +59,45 @@ describe('China-friendly network metadata providers', () => {
       artist: '测试歌手',
       album: '测试专辑',
       duration: 181,
-      coverUrl: 'https://p.music.126.net/cover.jpg',
+      coverUrl: 'https://p.music.126.net/cover.jpg?param=300y300',
     });
+  });
+
+  it('loads NetEase cover URLs from song detail when search only returns album picId', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          mockJsonResponse({
+            result: {
+              songs: [
+                {
+                  id: 123,
+                  name: '娴嬭瘯姝屾洸',
+                  duration: 181000,
+                  artists: [{ name: '娴嬭瘯姝屾墜' }],
+                  album: { name: '娴嬭瘯涓撹緫', picId: 109951168969997920 },
+                },
+              ],
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          mockJsonResponse({
+            songs: [
+              {
+                id: 123,
+                album: { picUrl: 'https://p.music.126.net/detail-cover.jpg' },
+              },
+            ],
+          }),
+        ),
+    );
+
+    const candidates = await new NeteaseCloudMusicProvider().findMetadata(track);
+
+    expect(candidates[0].coverUrl).toBe('https://p.music.126.net/detail-cover.jpg?param=300y300');
   });
 
   it('maps QQ Music search results to metadata candidates', async () => {

@@ -1,29 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { UIEvent } from 'react';
-import { ChevronDown, RefreshCw, Search } from 'lucide-react';
+import type { CSSProperties, KeyboardEvent, UIEvent } from 'react';
+import { ChevronDown, Play, RefreshCw, Search } from 'lucide-react';
 import type { LibraryArtist, LibrarySort } from '../../shared/types/library';
+import { ArtistDetailView } from '../components/artist/ArtistDetailView';
+import { artistHue, artistMark } from '../components/artist/artistVisual';
 
 const pageSize = 96;
-const segmenter =
-  typeof Intl !== 'undefined' && 'Segmenter' in Intl
-    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
-    : null;
-
-const artistMark = (name: string): string => {
-  const trimmed = name.trim();
-
-  if (!trimmed) {
-    return '?';
-  }
-
-  if (/^[\dA-Za-z]/.test(trimmed)) {
-    const compact = trimmed.replace(/^[^\dA-Za-z]+/, '').replace(/\s+/g, '');
-    return compact.slice(0, Math.min(2, compact.length)).toLocaleUpperCase();
-  }
-
-  const graphemes = segmenter ? Array.from(segmenter.segment(trimmed), (part) => part.segment) : Array.from(trimmed);
-  return graphemes.slice(0, 2).join('');
-};
 
 const artistMeta = (artist: LibraryArtist): string => {
   const parts: string[] = [];
@@ -47,6 +29,7 @@ export const ArtistsPage = (): JSX.Element => {
   const [sort, setSort] = useState<LibrarySort>('default');
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
+  const [selectedArtist, setSelectedArtist] = useState<LibraryArtist | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
@@ -146,6 +129,17 @@ export const ArtistsPage = (): JSX.Element => {
     void loadArtists(1, 'replace');
   }, [loadArtists]);
 
+  const handleArtistKeyDown = useCallback((event: KeyboardEvent<HTMLElement>, artist: LibraryArtist): void => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setSelectedArtist(artist);
+    }
+  }, []);
+
+  if (selectedArtist) {
+    return <ArtistDetailView artist={selectedArtist} onBack={() => setSelectedArtist(null)} />;
+  }
+
   return (
     <div className="artists-page">
       <header className="songs-header">
@@ -185,7 +179,15 @@ export const ArtistsPage = (): JSX.Element => {
 
       <section className="artist-wall" aria-label="Artist list" onScroll={handleArtistWallScroll}>
         {artists.map((artist) => (
-          <article className="artist-card" key={artist.id}>
+          <article
+            className="artist-card"
+            key={artist.id}
+            role="button"
+            tabIndex={0}
+            style={{ '--artist-hue': artistHue(artist.name) } as CSSProperties}
+            onClick={() => setSelectedArtist(artist)}
+            onKeyDown={(event) => handleArtistKeyDown(event, artist)}
+          >
             <div className="artist-avatar" aria-hidden="true">
               <span>{artistMark(artist.name)}</span>
             </div>
@@ -193,6 +195,9 @@ export const ArtistsPage = (): JSX.Element => {
               <strong>{artist.name}</strong>
               <small>{artistMeta(artist)}</small>
             </div>
+            <span className="artist-card-action" aria-hidden="true">
+              <Play size={14} fill="currentColor" />
+            </span>
           </article>
         ))}
       </section>

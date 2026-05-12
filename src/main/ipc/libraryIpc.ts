@@ -1,7 +1,17 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { clipboard, dialog, ipcMain, nativeImage, shell } from 'electron';
 import { IpcChannels } from '../../shared/constants/ipcChannels';
-import type { EditableTrackTags, LibraryPageQuery, LibrarySort, LibraryTrackTagUpdateRequest } from '../../shared/types/library';
+import type {
+  EditableTrackTags,
+  FinishPlaybackHistoryRequest,
+  LibraryPageQuery,
+  LibrarySort,
+  LibraryTrackTagUpdateRequest,
+  NetworkTagCandidateSearchRequest,
+  NetworkTagProvider,
+  PlaybackHistoryQuery,
+  StartPlaybackHistoryRequest,
+} from '../../shared/types/library';
 import { getAppSettings } from '../app/appSettings';
 import { getLibraryService } from '../library/LibraryService';
 import { SongCardRenderer } from '../library/SongCardRenderer';
@@ -60,6 +70,76 @@ const normalizeQuery = (value: unknown): LibraryPageQuery => {
   return query;
 };
 
+const normalizePlaybackHistoryQuery = (value: unknown): PlaybackHistoryQuery => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const input = value as Record<string, unknown>;
+  const query: PlaybackHistoryQuery = {};
+
+  if (typeof input.page === 'number') {
+    query.page = input.page;
+  }
+
+  if (typeof input.pageSize === 'number') {
+    query.pageSize = input.pageSize;
+  }
+
+  if (typeof input.search === 'string') {
+    query.search = input.search;
+  }
+
+  if (typeof input.from === 'string') {
+    query.from = input.from;
+  }
+
+  if (typeof input.to === 'string') {
+    query.to = input.to;
+  }
+
+  if (typeof input.completedOnly === 'boolean') {
+    query.completedOnly = input.completedOnly;
+  }
+
+  return query;
+};
+
+const normalizeStartPlaybackHistoryRequest = (value: unknown): StartPlaybackHistoryRequest => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('playback history start request must be an object');
+  }
+
+  const input = value as Record<string, unknown>;
+
+  return {
+    trackId: requireText(input.trackId, 'trackId'),
+    sourceType: typeof input.sourceType === 'string' && input.sourceType.trim() ? input.sourceType : null,
+    sourceLabel: typeof input.sourceLabel === 'string' && input.sourceLabel.trim() ? input.sourceLabel : null,
+    queueId: typeof input.queueId === 'string' && input.queueId.trim() ? input.queueId : null,
+  };
+};
+
+const normalizeFinishPlaybackHistoryRequest = (value: unknown): FinishPlaybackHistoryRequest => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('playback history finish request must be an object');
+  }
+
+  const input = value as Record<string, unknown>;
+  const playedSeconds = Number(input.playedSeconds);
+
+  if (!Number.isFinite(playedSeconds) || playedSeconds < 0) {
+    throw new Error('playedSeconds must be a non-negative number');
+  }
+
+  return {
+    historyId: requireText(input.historyId, 'historyId'),
+    playedSeconds,
+    completed: typeof input.completed === 'boolean' ? input.completed : undefined,
+    endedAt: typeof input.endedAt === 'string' && input.endedAt.trim() ? input.endedAt : undefined,
+  };
+};
+
 const optionalNumber = (value: unknown): number | null => {
   if (value === null || value === undefined || value === '') {
     return null;
@@ -73,6 +153,8 @@ const optionalLimit = (value: unknown, fallback: number): number => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(1, Math.min(500, Math.floor(parsed))) : fallback;
 };
+
+const networkTagProviders = new Set<NetworkTagProvider>(['mock', 'musicbrainz', 'cover-art-archive', 'netease-cloud-music', 'qq-music']);
 
 const normalizeTagUpdateRequest = (value: unknown): LibraryTrackTagUpdateRequest => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -105,6 +187,25 @@ const normalizeTagUpdateRequest = (value: unknown): LibraryTrackTagUpdateRequest
       genre: typeof tagsRecord.genre === 'string' && tagsRecord.genre.trim().length > 0 ? tagsRecord.genre : null,
     },
     coverPath: typeof input.coverPath === 'string' && input.coverPath.trim().length > 0 ? input.coverPath : null,
+    coverUrl: typeof input.coverUrl === 'string' && input.coverUrl.trim().length > 0 ? input.coverUrl : null,
+    coverMimeType: typeof input.coverMimeType === 'string' && input.coverMimeType.trim().length > 0 ? input.coverMimeType : null,
+  };
+};
+
+const normalizeNetworkTagCandidateSearchRequest = (value: unknown): NetworkTagCandidateSearchRequest => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { trackId: requireText(value, 'trackId') };
+  }
+
+  const input = value as Record<string, unknown>;
+  const providers = Array.isArray(input.providers)
+    ? input.providers.filter((provider): provider is NetworkTagProvider => typeof provider === 'string' && networkTagProviders.has(provider as NetworkTagProvider))
+    : undefined;
+
+  return {
+    trackId: requireText(input.trackId, 'trackId'),
+    query: typeof input.query === 'string' && input.query.trim().length > 0 ? input.query.trim() : undefined,
+    providers,
   };
 };
 
@@ -180,10 +281,20 @@ export const registerLibraryIpc = (): void => {
   ipcMain.handle(IpcChannels.LibraryGetArtists, (_event, query: unknown) =>
     getLibraryService().getArtists(normalizeQuery(query)),
   );
+  ipcMain.handle(IpcChannels.LibraryGetArtist, (_event, artistId: unknown) =>
+    getLibraryService().getArtist(requireText(artistId, 'artistId')),
+  );
+  ipcMain.handle(IpcChannels.LibraryGetArtistTracks, (_event, artistId: unknown, query: unknown) =>
+    getLibraryService().getArtistTracks(requireText(artistId, 'artistId'), normalizeQuery(query)),
+  );
+  ipcMain.handle(IpcChannels.LibraryGetArtistAlbums, (_event, artistId: unknown, query: unknown) =>
+    getLibraryService().getArtistAlbums(requireText(artistId, 'artistId'), normalizeQuery(query)),
+  );
   ipcMain.handle(IpcChannels.LibraryGetAlbumTracks, (_event, albumId: unknown, query: unknown) =>
     getLibraryService().getAlbumTracks(requireText(albumId, 'albumId'), normalizeQuery(query)),
   );
   ipcMain.handle(IpcChannels.LibraryGetSummary, () => getLibraryService().getSummary());
+  ipcMain.handle(IpcChannels.LibraryRefreshAlbumGrouping, () => getLibraryService().refreshAlbumGrouping());
   ipcMain.handle(IpcChannels.LibraryGetDiagnostics, () => getLibraryService().getDiagnostics());
   ipcMain.handle(IpcChannels.LibraryChooseTrackCover, async () => {
     const result = await dialog.showOpenDialog({
@@ -213,6 +324,20 @@ export const registerLibraryIpc = (): void => {
   );
   ipcMain.handle(IpcChannels.LibraryRecordTrackPlayback, (_event, trackId: unknown) =>
     getLibraryService().recordTrackPlayback(requireText(trackId, 'trackId')),
+  );
+  ipcMain.handle(IpcChannels.LibraryGetPlaybackHistory, (_event, query: unknown) =>
+    getLibraryService().getPlaybackHistory(normalizePlaybackHistoryQuery(query)),
+  );
+  ipcMain.handle(IpcChannels.LibraryGetPlaybackHistorySummary, () => getLibraryService().getPlaybackHistorySummary());
+  ipcMain.handle(IpcChannels.LibraryDeletePlaybackHistoryEntry, (_event, id: unknown) =>
+    getLibraryService().deletePlaybackHistoryEntry(requireText(id, 'historyId')),
+  );
+  ipcMain.handle(IpcChannels.LibraryClearPlaybackHistory, () => getLibraryService().clearPlaybackHistory());
+  ipcMain.handle(IpcChannels.LibraryStartPlaybackHistory, (_event, request: unknown) =>
+    getLibraryService().startPlaybackHistory(normalizeStartPlaybackHistoryRequest(request)),
+  );
+  ipcMain.handle(IpcChannels.LibraryFinishPlaybackHistory, (_event, request: unknown) =>
+    getLibraryService().finishPlaybackHistory(normalizeFinishPlaybackHistoryRequest(request)),
   );
   ipcMain.handle(IpcChannels.LibraryOpenTrackInFolder, (_event, trackId: unknown): void => {
     shell.showItemInFolder(getExistingTrack(trackId).path);
@@ -289,6 +414,20 @@ export const registerLibraryIpc = (): void => {
   );
   ipcMain.handle(IpcChannels.LibraryNetworkShowCandidates, (_event, trackId: unknown) =>
     getLibraryService().showNetworkCandidates(requireText(trackId, 'trackId')),
+  );
+  ipcMain.handle(IpcChannels.LibrarySearchNetworkTagCandidates, (_event, request: unknown) =>
+    {
+      const settings = getAppSettings();
+      if (!settings.networkMetadataEnabled) {
+        throw new Error('网络来源暂时不可用，请稍后再试。');
+      }
+
+      const normalized = normalizeNetworkTagCandidateSearchRequest(request);
+      return getLibraryService().searchNetworkTagCandidates({
+        ...normalized,
+        providers: normalized.providers?.length ? normalized.providers : settings.networkMetadataProviders,
+      });
+    },
   );
   ipcMain.handle(IpcChannels.LibraryNetworkApplyMissingOnly, (_event, candidateId: unknown) =>
     getLibraryService().applyNetworkMissingOnly(requireText(candidateId, 'candidateId')),

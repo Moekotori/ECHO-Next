@@ -30,6 +30,44 @@ export type TranslationKey =
   | 'notice.browserFolderPicker'
   | 'notice.browserFilePicker'
   | 'notice.windowControlsDesktop'
+  | 'queue.action.clear'
+  | 'queue.action.dragLabel'
+  | 'queue.action.dragTitle'
+  | 'queue.action.generateRandom'
+  | 'queue.action.generatingRandom'
+  | 'queue.action.like'
+  | 'queue.action.more'
+  | 'queue.action.openFolder'
+  | 'queue.action.play'
+  | 'queue.action.playNext'
+  | 'queue.action.remove'
+  | 'queue.action.shuffle'
+  | 'queue.count'
+  | 'queue.empty.description'
+  | 'queue.empty.title'
+  | 'queue.error.desktopBridge'
+  | 'queue.error.noRandomTracks'
+  | 'queue.header.kicker'
+  | 'queue.header.title'
+  | 'queue.now.actions'
+  | 'queue.now.emptyDescription'
+  | 'queue.now.emptyTitle'
+  | 'queue.now.kicker'
+  | 'queue.now.quality'
+  | 'queue.now.sourceFallback'
+  | 'queue.now.waitingAudio'
+  | 'queue.quality.unknown'
+  | 'queue.randomSource'
+  | 'queue.repeat.all'
+  | 'queue.repeat.mode'
+  | 'queue.repeat.off'
+  | 'queue.repeat.one'
+  | 'queue.tools'
+  | 'queue.upNext.kicker'
+  | 'queue.upNext.title'
+  | 'queue.upNext.waitingCount'
+  | 'queue.unknownAlbum'
+  | 'queue.unknownArtist'
   | 'route.albums.description'
   | 'route.albums.label'
   | 'route.artists.description'
@@ -124,8 +162,12 @@ export type TranslationKey =
   | 'settings.library.networkPanel.reject'
   | 'settings.library.networkPanel.repairMissing'
   | 'settings.library.networkPanel.repairThisTrack'
+  | 'settings.library.networkPanel.scanComplete'
   | 'settings.library.networkPanel.scanMissing'
   | 'settings.library.networkPanel.scanDone'
+  | 'settings.library.networkPanel.scanPreparing'
+  | 'settings.library.networkPanel.scanProgress'
+  | 'settings.library.networkPanel.scanRunning'
   | 'settings.library.networkPanel.showCandidates'
   | 'settings.library.networkPanel.title'
   | 'settings.library.networkPanel.titleField'
@@ -192,6 +234,44 @@ const zhCN: TranslationMap = {
   'notice.browserFolderPicker': '浏览器预览已打开文件夹选择器。真实曲库导入需要使用 Electron 桌面应用。',
   'notice.browserFilePicker': '浏览器预览已选择 {name}。请在 ECHO Next 桌面端通过 Audio Core 播放。',
   'notice.windowControlsDesktop': '窗口控制只在 Electron 桌面窗口中可用。',
+  'queue.action.clear': '清空队列',
+  'queue.action.dragLabel': '拖拽 {title}',
+  'queue.action.dragTitle': '拖拽排序',
+  'queue.action.generateRandom': '生成随机队列',
+  'queue.action.generatingRandom': '生成中',
+  'queue.action.like': '喜欢',
+  'queue.action.more': '更多',
+  'queue.action.openFolder': '打开所在文件夹',
+  'queue.action.play': '立即播放 {title}',
+  'queue.action.playNext': '下一首播放 {title}',
+  'queue.action.remove': '移除 {title}',
+  'queue.action.shuffle': '随机播放',
+  'queue.count': '{count} 首',
+  'queue.empty.description': '播放歌曲、加入队列或选择下一首播放后，这里会出现队列内容。',
+  'queue.empty.title': '还没有接下来播放的歌曲',
+  'queue.error.desktopBridge': '桌面桥接不可用。请在 ECHO Next 桌面端读取曲库。',
+  'queue.error.noRandomTracks': '曲库里还没有可加入随机队列的歌曲。',
+  'queue.header.kicker': '播放队列',
+  'queue.header.title': '队列',
+  'queue.now.actions': '当前曲目操作',
+  'queue.now.emptyDescription': '从歌曲或专辑开始播放后，这里会显示当前曲目。',
+  'queue.now.emptyTitle': '还没有正在播放的歌曲',
+  'queue.now.kicker': '正在播放',
+  'queue.now.quality': '音频质量',
+  'queue.now.sourceFallback': '队列',
+  'queue.now.waitingAudio': '等待音频信息',
+  'queue.quality.unknown': '未知',
+  'queue.randomSource': '随机队列',
+  'queue.repeat.all': '队列',
+  'queue.repeat.mode': '循环模式',
+  'queue.repeat.off': '关闭',
+  'queue.repeat.one': '单曲',
+  'queue.tools': '队列工具',
+  'queue.upNext.kicker': '接下来',
+  'queue.upNext.title': '接下来播放',
+  'queue.upNext.waitingCount': '{count} 首等待',
+  'queue.unknownAlbum': '未知专辑',
+  'queue.unknownArtist': '未知艺术家',
   'route.albums.description': '按专辑分组的封面墙。',
   'route.albums.label': '专辑',
   'route.artists.description': '按艺术家浏览。',
@@ -286,8 +366,12 @@ const zhCN: TranslationMap = {
   'settings.library.networkPanel.reject': '拒绝',
   'settings.library.networkPanel.repairMissing': '修复当前曲目',
   'settings.library.networkPanel.repairThisTrack': '补全此曲',
+  'settings.library.networkPanel.scanComplete': '扫描完成',
   'settings.library.networkPanel.scanMissing': '扫描缺少元数据',
   'settings.library.networkPanel.scanDone': '已扫描缺失曲目',
+  'settings.library.networkPanel.scanPreparing': '准备扫描',
+  'settings.library.networkPanel.scanProgress': '缺失元数据扫描进度',
+  'settings.library.networkPanel.scanRunning': '正在扫描网络来源',
   'settings.library.networkPanel.showCandidates': '显示候选',
   'settings.library.networkPanel.title': '缺失元数据修复',
   'settings.library.networkPanel.titleField': '标题',
@@ -342,6 +426,44 @@ const zhTW: TranslationMap = {
   'route.lyricsSettings.label': '歌詞設定',
   'route.playlists.label': '播放清單',
   'route.queue.label': '佇列',
+  'queue.action.clear': '清空佇列',
+  'queue.action.dragLabel': '拖曳 {title}',
+  'queue.action.dragTitle': '拖曳排序',
+  'queue.action.generateRandom': '產生隨機佇列',
+  'queue.action.generatingRandom': '產生中',
+  'queue.action.like': '喜歡',
+  'queue.action.more': '更多',
+  'queue.action.openFolder': '打開所在資料夾',
+  'queue.action.play': '立即播放 {title}',
+  'queue.action.playNext': '下一首播放 {title}',
+  'queue.action.remove': '移除 {title}',
+  'queue.action.shuffle': '隨機播放',
+  'queue.count': '{count} 首',
+  'queue.empty.description': '播放歌曲、加入佇列或選擇下一首播放後，這裡會出現佇列內容。',
+  'queue.empty.title': '還沒有接下來播放的歌曲',
+  'queue.error.desktopBridge': '桌面橋接不可用。請在 ECHO Next 桌面端讀取曲庫。',
+  'queue.error.noRandomTracks': '曲庫裡還沒有可加入隨機佇列的歌曲。',
+  'queue.header.kicker': '播放佇列',
+  'queue.header.title': '佇列',
+  'queue.now.actions': '目前曲目操作',
+  'queue.now.emptyDescription': '從歌曲或專輯開始播放後，這裡會顯示目前曲目。',
+  'queue.now.emptyTitle': '還沒有正在播放的歌曲',
+  'queue.now.kicker': '正在播放',
+  'queue.now.quality': '音訊品質',
+  'queue.now.sourceFallback': '佇列',
+  'queue.now.waitingAudio': '等待音訊資訊',
+  'queue.quality.unknown': '未知',
+  'queue.randomSource': '隨機佇列',
+  'queue.repeat.all': '佇列',
+  'queue.repeat.mode': '循環模式',
+  'queue.repeat.off': '關閉',
+  'queue.repeat.one': '單曲',
+  'queue.tools': '佇列工具',
+  'queue.upNext.kicker': '接下來',
+  'queue.upNext.title': '接下來播放',
+  'queue.upNext.waitingCount': '{count} 首等待',
+  'queue.unknownAlbum': '未知專輯',
+  'queue.unknownArtist': '未知演出者',
   'route.remote.label': '網路硬碟 / 遠端',
   'route.settings.label': '設定',
   'route.songs.label': '歌曲',
@@ -436,6 +558,44 @@ const jaJP: TranslationMap = {
   'route.playlists.label': 'プレイリスト',
   'route.queue.description': '再生キュー。',
   'route.queue.label': 'キュー',
+  'queue.action.clear': 'キューを空にする',
+  'queue.action.dragLabel': '{title} をドラッグ',
+  'queue.action.dragTitle': 'ドラッグして並べ替え',
+  'queue.action.generateRandom': 'ランダムキューを作成',
+  'queue.action.generatingRandom': '作成中',
+  'queue.action.like': 'お気に入り',
+  'queue.action.more': 'その他',
+  'queue.action.openFolder': '保存フォルダを開く',
+  'queue.action.play': '{title} を今すぐ再生',
+  'queue.action.playNext': '{title} を次に再生',
+  'queue.action.remove': '{title} を削除',
+  'queue.action.shuffle': 'シャッフル',
+  'queue.count': '{count} 曲',
+  'queue.empty.description': '曲を再生、キューに追加、または次に再生を選ぶとここに表示されます。',
+  'queue.empty.title': '次に再生する曲はありません',
+  'queue.error.desktopBridge': 'デスクトップブリッジが利用できません。ECHO Next デスクトップ版でライブラリを読み込んでください。',
+  'queue.error.noRandomTracks': 'ランダムキューに追加できる曲がライブラリにありません。',
+  'queue.header.kicker': '再生キュー',
+  'queue.header.title': 'キュー',
+  'queue.now.actions': '現在の曲の操作',
+  'queue.now.emptyDescription': '曲またはアルバムを再生すると、現在の曲がここに表示されます。',
+  'queue.now.emptyTitle': '再生中の曲はありません',
+  'queue.now.kicker': '再生中',
+  'queue.now.quality': '音質',
+  'queue.now.sourceFallback': 'キュー',
+  'queue.now.waitingAudio': '音声情報を待機中',
+  'queue.quality.unknown': '不明',
+  'queue.randomSource': 'ランダムキュー',
+  'queue.repeat.all': 'キュー',
+  'queue.repeat.mode': 'リピートモード',
+  'queue.repeat.off': 'オフ',
+  'queue.repeat.one': '1曲',
+  'queue.tools': 'キュー操作',
+  'queue.upNext.kicker': '次に再生',
+  'queue.upNext.title': '次の曲',
+  'queue.upNext.waitingCount': '{count} 曲待機中',
+  'queue.unknownAlbum': '不明なアルバム',
+  'queue.unknownArtist': '不明なアーティスト',
   'route.remote.description': 'リモートソース。',
   'route.remote.label': 'クラウド / リモート',
   'route.settings.description': 'アプリ設定。',
@@ -554,6 +714,44 @@ const enUS: TranslationMap = {
   'route.playlists.label': 'Playlists',
   'route.queue.description': 'Playback queue.',
   'route.queue.label': 'Queue',
+  'queue.action.clear': 'Clear queue',
+  'queue.action.dragLabel': 'Drag {title}',
+  'queue.action.dragTitle': 'Drag to reorder',
+  'queue.action.generateRandom': 'Generate random queue',
+  'queue.action.generatingRandom': 'Generating',
+  'queue.action.like': 'Like',
+  'queue.action.more': 'More',
+  'queue.action.openFolder': 'Open containing folder',
+  'queue.action.play': 'Play {title}',
+  'queue.action.playNext': 'Play next {title}',
+  'queue.action.remove': 'Remove {title}',
+  'queue.action.shuffle': 'Shuffle',
+  'queue.count': '{count} tracks',
+  'queue.empty.description': 'Play a song, add to queue, or choose play next to fill this list.',
+  'queue.empty.title': 'No upcoming tracks',
+  'queue.error.desktopBridge': 'Desktop bridge unavailable. Open ECHO Next desktop to read the library.',
+  'queue.error.noRandomTracks': 'Your library does not have any tracks for a random queue yet.',
+  'queue.header.kicker': 'Playback Queue',
+  'queue.header.title': 'Queue',
+  'queue.now.actions': 'Current track actions',
+  'queue.now.emptyDescription': 'Start a track or album to build the queue.',
+  'queue.now.emptyTitle': 'Nothing is playing',
+  'queue.now.kicker': 'Now Playing',
+  'queue.now.quality': 'Audio quality',
+  'queue.now.sourceFallback': 'Queue',
+  'queue.now.waitingAudio': 'Waiting for audio info',
+  'queue.quality.unknown': 'Unknown',
+  'queue.randomSource': 'Random queue',
+  'queue.repeat.all': 'Queue',
+  'queue.repeat.mode': 'Repeat mode',
+  'queue.repeat.off': 'Off',
+  'queue.repeat.one': 'One',
+  'queue.tools': 'Queue tools',
+  'queue.upNext.kicker': 'Up Next',
+  'queue.upNext.title': 'Upcoming tracks',
+  'queue.upNext.waitingCount': '{count} waiting',
+  'queue.unknownAlbum': 'Unknown album',
+  'queue.unknownArtist': 'Unknown artist',
   'route.remote.description': 'Remote sources.',
   'route.remote.label': 'Cloud / Remote',
   'route.settings.description': 'Application settings.',
@@ -624,8 +822,12 @@ const enUS: TranslationMap = {
   'settings.library.networkPanel.reject': 'Reject',
   'settings.library.networkPanel.repairMissing': 'Repair current track',
   'settings.library.networkPanel.repairThisTrack': 'Repair this track',
+  'settings.library.networkPanel.scanComplete': 'Scan complete',
   'settings.library.networkPanel.scanMissing': 'Scan Missing Metadata',
   'settings.library.networkPanel.scanDone': 'Scanned missing tracks',
+  'settings.library.networkPanel.scanPreparing': 'Preparing scan',
+  'settings.library.networkPanel.scanProgress': 'Missing metadata scan progress',
+  'settings.library.networkPanel.scanRunning': 'Scanning network providers',
   'settings.library.networkPanel.showCandidates': 'Show Candidates',
   'settings.library.networkPanel.title': 'Missing Metadata Repair',
   'settings.library.networkPanel.titleField': 'Title',

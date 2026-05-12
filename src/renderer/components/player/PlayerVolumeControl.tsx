@@ -26,9 +26,14 @@ export const PlayerVolumeControl = ({
   const [volume, setVolume] = useState(volumeFromStatus(status));
   const rootRef = useRef<HTMLDivElement | null>(null);
   const pendingCommitRef = useRef<number | null>(null);
+  const isInteractingRef = useRef(false);
   const Icon = volume <= 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
 
   useEffect(() => {
+    if (isInteractingRef.current || pendingCommitRef.current !== null) {
+      return;
+    }
+
     setVolume(volumeFromStatus(status));
   }, [status]);
 
@@ -97,9 +102,13 @@ export const PlayerVolumeControl = ({
           void setSettings({ playerVolume: safeVolume }).catch(() => undefined);
         }
         if (pendingCommitRef.current === safeVolume) {
+          pendingCommitRef.current = null;
           onStatusChange(nextStatus);
         }
       } catch (error) {
+        if (pendingCommitRef.current === safeVolume) {
+          pendingCommitRef.current = null;
+        }
         onError(error instanceof Error ? error.message : String(error));
       }
     },
@@ -111,6 +120,11 @@ export const PlayerVolumeControl = ({
     onOpenChange(true);
     const direction = event.deltaY > 0 ? -1 : 1;
     void commitVolume(volume + direction * 0.03);
+  };
+
+  const finishInteraction = (nextVolume: number): void => {
+    isInteractingRef.current = false;
+    void commitVolume(nextVolume);
   };
 
   return (
@@ -133,12 +147,21 @@ export const PlayerVolumeControl = ({
             max={1}
             min={0}
             onChange={(event) => setVolume(Number(event.currentTarget.value))}
+            onBlur={(event) => {
+              if (isInteractingRef.current) {
+                finishInteraction(Number(event.currentTarget.value));
+              }
+            }}
             onKeyUp={(event) => {
               if (event.key === 'Enter' || event.key === ' ' || event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End') {
                 void commitVolume(Number(event.currentTarget.value));
               }
             }}
-            onPointerUp={(event) => void commitVolume(Number(event.currentTarget.value))}
+            onPointerCancel={(event) => finishInteraction(Number(event.currentTarget.value))}
+            onPointerDown={() => {
+              isInteractingRef.current = true;
+            }}
+            onPointerUp={(event) => finishInteraction(Number(event.currentTarget.value))}
             step={0.01}
             type="range"
             value={volume}

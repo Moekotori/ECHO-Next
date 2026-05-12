@@ -137,6 +137,7 @@ const audioStatus = (overrides: Partial<AudioStatus> = {}): AudioStatus => ({
   bitPerfectCandidate: false,
   sampleRateMismatch: false,
   eqEnabled: false,
+  channelBalanceEnabled: false,
   dspActive: false,
   preampDb: 0,
   eqPresetName: 'Flat',

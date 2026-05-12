@@ -33,7 +33,7 @@ import {
   updateAppearancePreferences,
   type AppearancePreferences,
 } from '../preferences/appearancePreferences';
-import { getAppBridge, getAudioBridge } from '../utils/echoBridge';
+import { getAppBridge, getAudioBridge, getLibraryBridge } from '../utils/echoBridge';
 
 const isDevBuild = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 
@@ -61,6 +61,7 @@ type SettingsNavItem = {
 };
 
 type FontPickerTarget = 'main' | 'chinese';
+type AlbumMergeStrategy = AppSettings['albumMergeStrategy'];
 
 type LocalFontData = {
   family: string;
@@ -291,6 +292,9 @@ export const SettingsPage = (): JSX.Element => {
   const [cacheDirectoryBusy, setCacheDirectoryBusy] = useState(false);
   const [cacheDirectoryResult, setCacheDirectoryResult] = useState<CoverCacheMigrationResult | null>(null);
   const [cacheDirectoryMessage, setCacheDirectoryMessage] = useState<string | null>(null);
+  const [pendingAlbumMergeStrategy, setPendingAlbumMergeStrategy] = useState<AlbumMergeStrategy | null>(null);
+  const [albumGroupingBusy, setAlbumGroupingBusy] = useState(false);
+  const [albumGroupingMessage, setAlbumGroupingMessage] = useState<string | null>(null);
   const [fontFamilies, setFontFamilies] = useState<string[]>(fallbackFontFamilies);
   const [fontPickerTarget, setFontPickerTarget] = useState<FontPickerTarget | null>(null);
   const [fontPickerQuery, setFontPickerQuery] = useState('');
@@ -367,6 +371,12 @@ export const SettingsPage = (): JSX.Element => {
       setSelectedDeviceId(status.outputDeviceId);
     }
   }, [devices, status?.outputDeviceId]);
+
+  useEffect(() => {
+    if (appSettings?.albumMergeStrategy) {
+      setPendingAlbumMergeStrategy(appSettings.albumMergeStrategy);
+    }
+  }, [appSettings?.albumMergeStrategy]);
 
   useEffect(() => {
     if (compatibleDevices.length === 0) {
@@ -536,6 +546,41 @@ export const SettingsPage = (): JSX.Element => {
   const handleCloseToTrayToggle = (): void => {
     const nextHideToTrayOnClose = !(appSettings?.hideToTrayOnClose ?? false);
     patchAppSettings({ hideToTrayOnClose: nextHideToTrayOnClose });
+  };
+
+  const handleAlbumMergeStrategyApply = async (): Promise<void> => {
+    const nextStrategy = pendingAlbumMergeStrategy ?? appSettings?.albumMergeStrategy ?? 'standard';
+    const app = getAppBridge();
+    const library = getLibraryBridge();
+
+    if (!app || !library) {
+      setError('Desktop bridge unavailable. Open ECHO Next in Electron to refresh album grouping.');
+      return;
+    }
+
+    try {
+      setAlbumGroupingBusy(true);
+      setAlbumGroupingMessage(null);
+      setError(null);
+      const beforeSummary = await library.getSummary();
+      const settings = await app.setSettings({ albumMergeStrategy: nextStrategy });
+      setAppSettings(settings);
+      const afterSummary = await library.refreshAlbumGrouping();
+      const albumDelta = beforeSummary.albumCount - afterSummary.albumCount;
+      const changeText =
+        albumDelta > 0
+          ? `减少 ${albumDelta} 张`
+          : albumDelta < 0
+            ? `增加 ${Math.abs(albumDelta)} 张`
+            : '数量未变化';
+      setAlbumGroupingMessage(`专辑分组已更新：${beforeSummary.albumCount} 张 -> ${afterSummary.albumCount} 张，${changeText}。`);
+      window.dispatchEvent(new Event('library:changed'));
+    } catch (albumGroupingError) {
+      setAlbumGroupingMessage(null);
+      setError(albumGroupingError instanceof Error ? albumGroupingError.message : String(albumGroupingError));
+    } finally {
+      setAlbumGroupingBusy(false);
+    }
   };
 
   const toggleNetworkProvider = (provider: AppSettings['networkMetadataProviders'][number]): void => {
@@ -842,6 +887,47 @@ export const SettingsPage = (): JSX.Element => {
 
             <SettingSection activeKey={activeSection} icon={Download} id="library" title={t('settings.nav.library.label')}>
               <LibraryFoldersPanel />
+              <SettingRow
+                className="setting-row--full"
+                title="专辑合并策略"
+                description="选择专辑列表如何把歌曲整理成专辑，不会改变歌曲 artist 显示或元数据。"
+              >
+                <div className="settings-cache-panel">
+                  <div className="settings-chip-row settings-chip-row--left">
+                    <ChipButton
+                      active={(pendingAlbumMergeStrategy ?? appSettings?.albumMergeStrategy ?? 'standard') === 'standard'}
+                      onClick={() => setPendingAlbumMergeStrategy('standard')}
+                    >
+                      标准模式（推荐）
+                    </ChipButton>
+                    <ChipButton
+                      active={(pendingAlbumMergeStrategy ?? appSettings?.albumMergeStrategy ?? 'standard') === 'sameTitleAndCover'}
+                      onClick={() => setPendingAlbumMergeStrategy('sameTitleAndCover')}
+                    >
+                      宽松合并
+                    </ChipButton>
+                  </div>
+                  <div className="settings-status-grid">
+                    <span>
+                      <em>标准模式（推荐）</em>
+                      <strong>优先使用 Album Artist；缺失时按文件夹 + 专辑名分组，最不容易误合并。</strong>
+                    </span>
+                    <span>
+                      <em>宽松合并</em>
+                      <strong>专辑名一致且封面一致时合并，适合合集、角色曲、手游专辑、Vocaloid 合集。</strong>
+                    </span>
+                  </div>
+                  <button
+                    className="settings-action-button"
+                    type="button"
+                    onClick={() => void handleAlbumMergeStrategyApply()}
+                    disabled={!appSettings || albumGroupingBusy}
+                  >
+                    {albumGroupingBusy ? '重新整理中...' : '应用并重新整理专辑'}
+                  </button>
+                  {albumGroupingMessage ? <p className="settings-inline-note">{albumGroupingMessage}</p> : null}
+                </div>
+              </SettingRow>
               <SettingRow
                 className="setting-row--full"
                 title="封面缓存目录"

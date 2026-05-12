@@ -61,6 +61,7 @@ const audioStatus = (track: LibraryTrack): AudioStatus => ({
   bitPerfectCandidate: false,
   sampleRateMismatch: false,
   eqEnabled: false,
+  channelBalanceEnabled: false,
   dspActive: false,
   preampDb: 0,
   eqPresetName: 'Flat',
@@ -84,12 +85,12 @@ const eqState = (): EqState => ({
 });
 
 const QueueSeed = ({ tracks }: { tracks: LibraryTrack[] }): JSX.Element => {
-  const { setCurrentTrackId, setQueue } = usePlaybackQueue();
+  const { setCurrentTrackId, replaceQueue } = usePlaybackQueue();
 
   useEffect(() => {
-    setQueue(tracks);
+    replaceQueue(tracks);
     setCurrentTrackId(tracks[0]?.id ?? null);
-  }, [setCurrentTrackId, setQueue, tracks]);
+  }, [replaceQueue, setCurrentTrackId, tracks]);
 
   return <PlayerBar />;
 };
@@ -271,7 +272,7 @@ describe('PlayerBar', () => {
     );
 
     await screen.findByText('Song 1');
-    fireEvent.click(screen.getByRole('button', { name: '下一首' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
     await waitFor(() => expect(screen.getByText('Song 2')).toBeTruthy());
     expect(screen.queryByText('Song 1')).toBeNull();

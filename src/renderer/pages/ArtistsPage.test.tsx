@@ -4,6 +4,17 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { ArtistsPage } from './ArtistsPage';
 import type { LibraryArtist, LibraryPage } from '../../shared/types/library';
 
+vi.mock('../components/artist/ArtistDetailView', () => ({
+  ArtistDetailView: ({ artist, onBack }: { artist: LibraryArtist; onBack: () => void }) => (
+    <div>
+      <h1>Detail: {artist.name}</h1>
+      <button type="button" onClick={onBack}>
+        Back to artists
+      </button>
+    </div>
+  ),
+}));
+
 const artist = (id: string, overrides: Partial<LibraryArtist> = {}): LibraryArtist => ({
   id,
   name: `Artist ${id}`,
@@ -30,6 +41,9 @@ const installLibrary = (getArtists: ReturnType<typeof vi.fn>): void => {
       getAlbums: vi.fn(),
       getTracks: vi.fn(),
       getAlbumTracks: vi.fn(),
+      getArtist: vi.fn(),
+      getArtistTracks: vi.fn(),
+      getArtistAlbums: vi.fn(),
       getSummary: vi.fn(),
       chooseFolder: vi.fn(),
       addFolder: vi.fn(),
@@ -109,5 +123,36 @@ describe('ArtistsPage', () => {
     fireEvent.change(screen.getByDisplayValue('Default'), { target: { value: 'frequent' } });
     await waitFor(() => expect(getArtists).toHaveBeenCalledTimes(3));
     expect(getArtists).toHaveBeenNthCalledWith(3, { page: 1, pageSize: 96, search: '2hollis', sort: 'frequent' });
+  });
+
+  it('opens artist detail on click and returns with Back', async () => {
+    const getArtists = vi.fn().mockResolvedValue(page([artist('1')]));
+    installLibrary(getArtists);
+
+    render(<ArtistsPage />);
+
+    await screen.findByText('Artist 1');
+    fireEvent.click(screen.getByText('Artist 1').closest('[role="button"]')!);
+
+    expect(screen.getByText('Detail: Artist 1')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to artists' }));
+
+    expect(screen.getByText('Artist 1')).toBeTruthy();
+  });
+
+  it('opens artist detail from Enter and Space keys', async () => {
+    const getArtists = vi.fn().mockResolvedValue(page([artist('1'), artist('2')]));
+    installLibrary(getArtists);
+
+    render(<ArtistsPage />);
+
+    await screen.findByText('Artist 1');
+    fireEvent.keyDown(screen.getByText('Artist 1').closest('[role="button"]')!, { key: 'Enter' });
+    expect(screen.getByText('Detail: Artist 1')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to artists' }));
+    fireEvent.keyDown(screen.getByText('Artist 2').closest('[role="button"]')!, { key: ' ' });
+    expect(screen.getByText('Detail: Artist 2')).toBeTruthy();
   });
 });

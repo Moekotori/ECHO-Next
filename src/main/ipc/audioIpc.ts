@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron';
 import { IpcChannels } from '../../shared/constants/ipcChannels';
-import type { AudioOutputMode, AudioOutputSettings, AudioStatus, PlaybackSpeedMode } from '../../shared/types/audio';
+import type { AudioOutputMode, AudioOutputSettings, AudioStatus, ChannelBalanceState, PlaybackSpeedMode } from '../../shared/types/audio';
 import type { EqSavePresetRequest, EqSetBandFrequencyRequest, EqSetBandGainRequest, EqState } from '../../shared/types/eq';
 import { getAudioSession } from '../audio/AudioSession';
 import { getEqBridge } from '../audio/EqBridge';
@@ -77,4 +77,9 @@ export const registerAudioIpc = (): void => {
   ipcMain.handle(IpcChannels.EqListPresets, () => getEqBridge().listPresets());
   ipcMain.handle(IpcChannels.EqSavePreset, (_event, request: EqSavePresetRequest) => getEqBridge().savePreset(request));
   ipcMain.handle(IpcChannels.EqDeletePreset, (_event, presetId: unknown) => getEqBridge().deletePreset(String(presetId)));
+  ipcMain.handle(IpcChannels.ChannelBalanceGetState, (): ChannelBalanceState => getEqBridge().getChannelBalanceState());
+  ipcMain.handle(IpcChannels.ChannelBalanceSetState, async (_event, patch: Partial<ChannelBalanceState>): Promise<ChannelBalanceState> =>
+    getEqBridge().setChannelBalanceState(patch),
+  );
+  ipcMain.handle(IpcChannels.ChannelBalanceReset, async (): Promise<ChannelBalanceState> => getEqBridge().resetChannelBalance());
 };

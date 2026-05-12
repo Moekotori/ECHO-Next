@@ -5,6 +5,7 @@
 
 #include "../../audio-engine/EqMessageProtocol.h"
 #include "../../audio-engine/EqProcessor.h"
+#include "../../audio-engine/ChannelBalanceProcessor.h"
 
 #include <algorithm>
 #include <atomic>
@@ -534,23 +535,31 @@ std::vector<DeviceDescriptor> buildOpenCandidates(const Options& options, const 
 class PcmRingAudioSource final : public juce::AudioSource
 {
 public:
-    PcmRingAudioSource(int channelCount, int capacityFrames, double gainToUse, echo::EqProcessor& eqProcessorToUse)
+    PcmRingAudioSource(
+        int channelCount,
+        int capacityFrames,
+        double gainToUse,
+        echo::EqProcessor& eqProcessorToUse,
+        echo::ChannelBalanceProcessor& channelBalanceProcessorToUse)
         : channels(channelCount),
           gain(static_cast<float>(gainToUse)),
           fifo(capacityFrames),
           buffer(static_cast<size_t>(capacityFrames * channelCount), 0.0f),
-          eqProcessor(eqProcessorToUse)
+          eqProcessor(eqProcessorToUse),
+          channelBalanceProcessor(channelBalanceProcessorToUse)
     {
     }
 
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override
     {
         eqProcessor.prepare(sampleRate, samplesPerBlockExpected, channels);
+        channelBalanceProcessor.prepare(sampleRate, samplesPerBlockExpected, channels);
     }
 
     void releaseResources() override
     {
         eqProcessor.reset();
+        channelBalanceProcessor.reset();
     }
 
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& info) override
@@ -592,6 +601,7 @@ public:
         }
 
         eqProcessor.processBlock(*info.buffer, info.startSample, info.numSamples);
+        channelBalanceProcessor.processBlock(*info.buffer, info.startSample, info.numSamples);
     }
 
     bool push(const float* samples, int frameCount)
@@ -697,6 +707,7 @@ private:
     juce::AbstractFifo fifo;
     std::vector<float> buffer;
     echo::EqProcessor& eqProcessor;
+    echo::ChannelBalanceProcessor& channelBalanceProcessor;
     std::atomic<bool> inputEnded { false };
     std::atomic<bool> stopRequested { false };
     std::atomic<uint64_t> framesPlayed { 0 };
@@ -707,9 +718,13 @@ private:
 class EqControlServer final
 {
 public:
-    EqControlServer(int portToUse, echo::EqProcessor& processorToUse)
+    EqControlServer(
+        int portToUse,
+        echo::EqProcessor& processorToUse,
+        echo::ChannelBalanceProcessor& channelBalanceProcessorToUse)
         : port(portToUse),
-          processor(processorToUse)
+          processor(processorToUse),
+          channelBalanceProcessor(channelBalanceProcessorToUse)
     {
     }
 
@@ -788,7 +803,7 @@ private:
 
                 if (! line.empty())
                 {
-                    const auto response = echo::EqMessageProtocol::handleJsonLine(line, processor) + "\n";
+                    const auto response = echo::EqMessageProtocol::handleJsonLine(line, processor, channelBalanceProcessor) + "\n";
                     socket.write(response.data(), static_cast<int>(response.size()));
                 }
 
@@ -799,6 +814,7 @@ private:
 
     const int port = 0;
     echo::EqProcessor& processor;
+    echo::ChannelBalanceProcessor& channelBalanceProcessor;
     juce::StreamingSocket listener;
     juce::StreamingSocket* client = nullptr;
     std::thread worker;
@@ -1028,14 +1044,16 @@ int runHost(const Options& options)
     auto device = openSelectedDevice(options, descriptor, types, openedDescriptor, actualSampleRate);
 
     echo::EqProcessor eqProcessor;
-    EqControlServer eqControlServer(options.eqControlPort, eqProcessor);
+    echo::ChannelBalanceProcessor channelBalanceProcessor;
+    EqControlServer eqControlServer(options.eqControlPort, eqProcessor, channelBalanceProcessor);
     eqControlServer.start();
 
     PcmRingAudioSource source(
         options.channels,
         std::max(actualSampleRate / 5, 4096),
         options.volume,
-        eqProcessor);
+        eqProcessor,
+        channelBalanceProcessor);
     juce::AudioSourcePlayer player;
     player.setSource(&source);
 
@@ -1049,7 +1067,7 @@ int runHost(const Options& options)
         + ",\"channels\":" + std::to_string(options.channels)
         + ",\"exclusive\":" + std::string(openedExclusive ? "true" : "false")
         + ",\"eqControlPort\":" + std::to_string(options.eqControlPort)
-        + ",\"dspActive\":" + std::string(eqProcessor.isEnabled() ? "true" : "false")
+        + ",\"dspActive\":" + std::string((eqProcessor.isEnabled() || channelBalanceProcessor.isEnabled()) ? "true" : "false")
         + ",\"backend\":\"" + getBackendName(options, openedDescriptor.typeName)
         + "\",\"deviceType\":\""
         + jsonEscape(openedDescriptor.typeName) + "\",\"deviceName\":\""

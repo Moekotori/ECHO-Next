@@ -132,6 +132,47 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
   FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS playback_history (
+  id TEXT PRIMARY KEY,
+  track_id TEXT,
+  track_path TEXT NOT NULL,
+  title TEXT NOT NULL,
+  artist TEXT NOT NULL,
+  album TEXT,
+  album_artist TEXT,
+  cover_id TEXT,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  played_seconds REAL NOT NULL DEFAULT 0,
+  duration_seconds REAL NOT NULL DEFAULT 0,
+  completed INTEGER NOT NULL DEFAULT 0,
+  source_type TEXT,
+  source_label TEXT,
+  queue_id TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS playback_history_stats (
+  history_key TEXT PRIMARY KEY,
+  track_id TEXT,
+  track_path TEXT NOT NULL,
+  title TEXT NOT NULL,
+  artist TEXT NOT NULL,
+  album TEXT,
+  album_artist TEXT,
+  cover_id TEXT,
+  play_count INTEGER NOT NULL DEFAULT 0,
+  completed_count INTEGER NOT NULL DEFAULT 0,
+  total_played_seconds REAL NOT NULL DEFAULT 0,
+  duration_seconds REAL NOT NULL DEFAULT 0,
+  last_started_at TEXT NOT NULL,
+  last_ended_at TEXT,
+  source_type TEXT,
+  source_label TEXT,
+  queue_id TEXT,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS network_metadata_candidates (
   id TEXT PRIMARY KEY,
   track_id TEXT NOT NULL,
@@ -197,4 +238,11 @@ CREATE INDEX IF NOT EXISTS idx_covers_id ON covers(id);
 CREATE INDEX IF NOT EXISTS idx_network_metadata_candidates_track_id ON network_metadata_candidates(track_id);
 CREATE INDEX IF NOT EXISTS idx_network_metadata_decisions_track_id ON network_metadata_decisions(track_id);
 CREATE INDEX IF NOT EXISTS idx_network_cover_candidates_track_id ON network_cover_candidates(track_id);
+CREATE INDEX IF NOT EXISTS idx_playback_history_started_at ON playback_history(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_playback_history_track_id ON playback_history(track_id);
+CREATE INDEX IF NOT EXISTS idx_playback_history_completed ON playback_history(completed);
+CREATE INDEX IF NOT EXISTS idx_playback_history_track_started ON playback_history(track_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_playback_history_path_started ON playback_history(track_path, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_playback_history_stats_play_count ON playback_history_stats(play_count DESC, last_started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_playback_history_stats_last_started_at ON playback_history_stats(last_started_at DESC);
 `;

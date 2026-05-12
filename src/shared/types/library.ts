@@ -102,6 +102,61 @@ export type LibraryPageQuery = {
   sort?: LibrarySort;
 };
 
+export type PlaybackHistoryEntry = {
+  id: string;
+  trackId: string | null;
+  trackPath: string;
+  title: string;
+  artist: string;
+  album: string;
+  albumArtist: string;
+  coverId: string | null;
+  coverThumb: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  playedSeconds: number;
+  durationSeconds: number;
+  playCount: number;
+  completed: boolean;
+  sourceType: string | null;
+  sourceLabel: string | null;
+  queueId: string | null;
+};
+
+export type PlaybackHistoryQuery = {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  from?: string;
+  to?: string;
+  completedOnly?: boolean;
+};
+
+export type StartPlaybackHistoryRequest = {
+  trackId: string;
+  sourceType?: string | null;
+  sourceLabel?: string | null;
+  queueId?: string | null;
+};
+
+export type StartPlaybackHistoryResult = {
+  historyId: string;
+};
+
+export type FinishPlaybackHistoryRequest = {
+  historyId: string;
+  playedSeconds: number;
+  completed?: boolean;
+  endedAt?: string;
+};
+
+export type PlaybackHistorySummary = {
+  todayCount: number;
+  todayPlayedSeconds: number;
+  totalCount: number;
+  latestPlayedAt: string | null;
+};
+
 export type LibraryTrack = {
   id: string;
   path: string;
@@ -155,6 +210,35 @@ export type LibraryTrackTagUpdateRequest = {
   trackId: string;
   tags: EditableTrackTags;
   coverPath?: string | null;
+  coverUrl?: string | null;
+  coverMimeType?: string | null;
+};
+
+export type NetworkTagProvider = 'netease-cloud-music' | 'qq-music' | 'musicbrainz' | 'cover-art-archive' | 'mock';
+
+export type NetworkTagCandidate = {
+  id: string;
+  provider: NetworkTagProvider;
+  confidence: number;
+  title: string;
+  artist: string;
+  album: string;
+  albumArtist: string;
+  trackNo: number | null;
+  discNo: number | null;
+  year: number | null;
+  genre: string | null;
+  duration: number | null;
+  coverUrl?: string | null;
+  coverMimeType?: string | null;
+  coverPreviewUrl?: string | null;
+  raw?: unknown;
+};
+
+export type NetworkTagCandidateSearchRequest = {
+  trackId: string;
+  query?: string;
+  providers?: NetworkTagProvider[];
 };
 
 export type LibraryAlbum = {

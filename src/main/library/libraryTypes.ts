@@ -11,6 +11,12 @@ import type {
   LibraryTrack,
   LibraryCleanupResult,
   LibraryTrackTagUpdateRequest,
+  PlaybackHistoryEntry,
+  PlaybackHistoryQuery,
+  PlaybackHistorySummary,
+  StartPlaybackHistoryRequest,
+  StartPlaybackHistoryResult,
+  FinishPlaybackHistoryRequest,
 } from '../../shared/types/library';
 
 export type {
@@ -26,6 +32,12 @@ export type {
   LibraryTrack,
   LibraryCleanupResult,
   LibraryTrackTagUpdateRequest,
+  PlaybackHistoryEntry,
+  PlaybackHistoryQuery,
+  PlaybackHistorySummary,
+  StartPlaybackHistoryRequest,
+  StartPlaybackHistoryResult,
+  FinishPlaybackHistoryRequest,
 };
 
 export type ScannedAudioFile = {

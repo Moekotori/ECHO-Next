@@ -18,8 +18,10 @@ import type { LucideIcon } from 'lucide-react';
 import { AlbumsPage } from '../pages/AlbumsPage';
 import { ArtistsPage } from '../pages/ArtistsPage';
 import { FoldersPage } from '../pages/FoldersPage';
+import { HistoryPage } from '../pages/HistoryPage';
 import { ImportFolderPage } from '../pages/ImportFolderPage';
 import { PlaylistsPage } from '../pages/PlaylistsPage';
+import { QueuePage } from '../pages/QueuePage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { SongsPage } from '../pages/SongsPage';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -125,7 +127,7 @@ export const appRoutes: AppRoute[] = [
     descriptionKey: 'route.queue.description',
     icon: ListMusic,
     placement: 'main',
-    element: <PlaceholderPage icon={ListMusic} title="Queue" description="Queue UI stays separate from the song list." />,
+    element: <QueuePage />,
   },
   {
     id: 'history',
@@ -135,7 +137,7 @@ export const appRoutes: AppRoute[] = [
     descriptionKey: 'route.history.description',
     icon: History,
     placement: 'main',
-    element: <PlaceholderPage icon={History} title="History" description="Recent plays and history will appear here." />,
+    element: <HistoryPage />,
   },
   {
     id: 'playlists',

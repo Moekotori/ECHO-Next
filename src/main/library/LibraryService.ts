@@ -5,6 +5,7 @@ import { applyCoverArt, applyTags } from 'taglib-wasm';
 import { getAppSettings } from '../app/appSettings';
 import { createDatabase } from '../database/createDatabase';
 import { AlbumService } from './AlbumService';
+import type { AlbumMergeStrategy } from './AlbumService';
 import { getDefaultCoverCacheDir, migrateCoverCache, resolveConfiguredCoverCacheDir, resolveCoverCacheDir } from './CoverCacheManager';
 import { LibraryStore } from './LibraryStore';
 import { inflateMetadataResult } from './MetadataService';
@@ -26,8 +27,20 @@ import type {
   LibraryTrackTagUpdateRequest,
   CoverVariant,
   MetadataResult,
+  PlaybackHistoryEntry,
+  PlaybackHistoryQuery,
+  PlaybackHistorySummary,
+  StartPlaybackHistoryRequest,
+  StartPlaybackHistoryResult,
+  FinishPlaybackHistoryRequest,
 } from './libraryTypes';
-import type { EmbeddedTrackTagsLoadResult, MissingMetadataScanResult, NetworkApplyResult } from '../../shared/types/library';
+import type {
+  EmbeddedTrackTagsLoadResult,
+  MissingMetadataScanResult,
+  NetworkApplyResult,
+  NetworkTagCandidate,
+  NetworkTagCandidateSearchRequest,
+} from '../../shared/types/library';
 import type { AppSettings } from '../../shared/types/appSettings';
 import type { CoverCacheMigrationResult } from '../../shared/types/coverCache';
 import type { CoverExtractor } from './workers/CoverExtractor';
@@ -43,6 +56,7 @@ type LibraryServiceDependencies = {
   coverExtractor?: CoverExtractor;
   metadataService?: MetadataService;
   coverCacheDir?: string;
+  appSettings?: () => AppSettings;
   metadataConcurrency?: number;
   coverConcurrency?: number;
 };
@@ -58,6 +72,7 @@ export class LibraryService {
     private readonly coverExtractor: CoverExtractor = new TsCoverExtractor(),
     private readonly metadataReader: MetadataReader = new TsMetadataReader(),
     private readonly networkMetadataService: NetworkMetadataService | null = null,
+    private readonly readAppSettings: () => AppSettings = getAppSettings,
   ) {}
 
   addFolder(folderPath: string): LibraryFolder {
@@ -109,6 +124,18 @@ export class LibraryService {
     return this.store.getArtists(query);
   }
 
+  getArtist(artistId: string): LibraryArtist | null {
+    return this.store.getArtist(artistId);
+  }
+
+  getArtistTracks(artistId: string, query?: Pick<LibraryPageQuery, 'page' | 'pageSize' | 'sort'>): LibraryPage<LibraryTrack> {
+    return this.store.getArtistTracks(artistId, query);
+  }
+
+  getArtistAlbums(artistId: string, query?: Pick<LibraryPageQuery, 'page' | 'pageSize' | 'sort'>): LibraryPage<LibraryAlbum> {
+    return this.store.getArtistAlbums(artistId, query);
+  }
+
   getAlbumTracks(albumId: string, query?: Pick<LibraryPageQuery, 'page' | 'pageSize'>): LibraryPage<LibraryTrack> {
     return this.store.getAlbumTracks(albumId, query);
   }
@@ -138,6 +165,66 @@ export class LibraryService {
     this.store.recordTrackPlayback(trackId);
   }
 
+  startPlaybackHistory(request: StartPlaybackHistoryRequest): StartPlaybackHistoryResult {
+    const track = this.store.getTrack(request.trackId);
+
+    if (!track) {
+      throw new Error(`Unknown track ${request.trackId}`);
+    }
+
+    const entry = this.store.createPlaybackHistoryEntry({
+      trackId: track.id,
+      trackPath: track.path,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      albumArtist: track.albumArtist,
+      coverId: track.coverId,
+      durationSeconds: track.duration,
+      sourceType: request.sourceType,
+      sourceLabel: request.sourceLabel,
+      queueId: request.queueId,
+    });
+
+    return { historyId: entry.id };
+  }
+
+  finishPlaybackHistory(request: FinishPlaybackHistoryRequest): PlaybackHistoryEntry | null {
+    return this.store.finishPlaybackHistoryEntry(request.historyId, {
+      playedSeconds: request.playedSeconds,
+      completed: request.completed,
+      endedAt: request.endedAt,
+    });
+  }
+
+  getPlaybackHistory(query?: PlaybackHistoryQuery): LibraryPage<PlaybackHistoryEntry> {
+    return this.store.getPlaybackHistory(query);
+  }
+
+  getPlaybackHistorySummary(): PlaybackHistorySummary {
+    return this.store.getPlaybackHistorySummary();
+  }
+
+  deletePlaybackHistoryEntry(id: string): void {
+    this.store.deletePlaybackHistoryEntry(id);
+  }
+
+  clearPlaybackHistory(): void {
+    this.store.clearPlaybackHistory();
+  }
+
+  refreshAlbumGrouping(): LibrarySummary {
+    if (this.hasRunningJobs()) {
+      throw new Error('Cannot refresh album grouping while a library scan is running.');
+    }
+
+    return this.store.transaction(() => {
+      this.store.refreshAlbums(this.albumService, new Date().toISOString(), this.albumRefreshOptions());
+      this.store.refreshArtists();
+      return this.store.getSummary();
+    });
+  }
+
   async loadEmbeddedTrackTags(trackId: string): Promise<EmbeddedTrackTagsLoadResult> {
     const currentTrack = this.store.getTrack(trackId);
 
@@ -160,7 +247,7 @@ export class LibraryService {
       coverId = this.store.transaction(() => {
         const nextCoverId = this.store.upsertCover({ ...coverResult, source: 'embedded' });
         this.store.updateTrackCover(trackId, nextCoverId);
-        this.store.refreshAlbums(this.albumService);
+        this.store.refreshAlbums(this.albumService, undefined, this.albumRefreshOptions());
         return nextCoverId;
       });
     }
@@ -194,7 +281,14 @@ export class LibraryService {
 
     const tags = normalizeEditableTags(request.tags, currentTrack);
     const coverPath = cleanNullableText(request.coverPath ?? null);
-    const coverData = coverPath ? readCoverImage(coverPath) : null;
+    const coverUrl = cleanNullableText(request.coverUrl ?? null);
+    let coverData: { data: Uint8Array; mimeType: string } | null = null;
+    if (coverPath) {
+      coverData = readCoverImage(coverPath);
+    } else if (coverUrl) {
+      // Network cover failures should not block confirmed text tag edits.
+      coverData = await readCoverImageFromUrl(coverUrl, request.coverMimeType ?? null).catch(() => null);
+    }
 
     try {
       const sourceAudio = readFileSync(currentTrack.path);
@@ -237,7 +331,7 @@ export class LibraryService {
         cacheRoot: this.coverCacheDir,
         metadata: metadataWithEmbeddedCover(coverData.data, coverData.mimeType),
       });
-      manualCoverId = this.store.upsertCover({ ...coverResult, source: 'manual' });
+      manualCoverId = this.store.upsertCover({ ...coverResult, source: coverUrl && !coverPath ? 'network' : 'manual' });
     }
 
     return this.store.transaction(() => {
@@ -250,7 +344,7 @@ export class LibraryService {
       if (manualCoverId !== undefined) {
         this.store.updateTrackCover(request.trackId, manualCoverId);
       }
-      this.store.refreshAlbums(this.albumService);
+      this.store.refreshAlbums(this.albumService, undefined, this.albumRefreshOptions());
       this.store.refreshArtists();
       return manualCoverId !== undefined ? this.store.getTrack(request.trackId) ?? updated : updated;
     });
@@ -280,6 +374,14 @@ export class LibraryService {
     return this.networkMetadataService.showCandidates(trackId);
   }
 
+  async searchNetworkTagCandidates(request: NetworkTagCandidateSearchRequest): Promise<NetworkTagCandidate[]> {
+    if (!this.networkMetadataService) {
+      throw new Error('Network metadata service is unavailable');
+    }
+
+    return this.networkMetadataService.searchNetworkTagCandidates(request);
+  }
+
   applyNetworkMissingOnly(candidateId: string): NetworkApplyResult {
     if (!this.networkMetadataService) {
       throw new Error('Network metadata service is unavailable');
@@ -288,12 +390,45 @@ export class LibraryService {
     return this.networkMetadataService.applyMissingOnly(candidateId);
   }
 
-  applyNetworkSelected(candidateId: string): NetworkApplyResult {
+  async applyNetworkSelected(candidateId: string): Promise<NetworkApplyResult> {
     if (!this.networkMetadataService) {
       throw new Error('Network metadata service is unavailable');
     }
 
-    return this.networkMetadataService.applySelected(candidateId);
+    const candidate = this.networkMetadataService.getMetadataCandidate(candidateId);
+    const result = this.networkMetadataService.applySelected(candidateId);
+    if (!candidate?.coverUrl) {
+      return result;
+    }
+
+    const track = this.store.getTrack(candidate.trackId);
+    if (!track || track.coverId || track.embeddedCoverStatus === 'present' || track.embeddedCoverStatus === 'pending' || track.embeddedCoverStatus === 'reading') {
+      return result;
+    }
+
+    const coverData = await readCoverImageFromUrl(candidate.coverUrl, null).catch(() => null);
+    if (!coverData) {
+      return result;
+    }
+
+    const coverResult = await this.coverExtractor.extract(track.path, {
+      cacheRoot: this.coverCacheDir,
+      metadata: metadataWithEmbeddedCover(coverData.data, coverData.mimeType),
+    });
+    const coverId = this.store.transaction(() => {
+      const nextCoverId = this.store.upsertCover({ ...coverResult, source: 'network' });
+      this.store.updateTrackCover(track.id, nextCoverId);
+      this.store.refreshAlbums(this.albumService, undefined, this.albumRefreshOptions());
+      return nextCoverId;
+    });
+
+    return {
+      ...result,
+      appliedFields: {
+        ...result.appliedFields,
+        coverId,
+      },
+    };
   }
 
   rejectNetworkCandidate(candidateId: string): NetworkApplyResult {
@@ -307,7 +442,7 @@ export class LibraryService {
   deleteTrack(trackId: string): void {
     this.store.transaction(() => {
       this.store.deleteTrack(trackId);
-      this.store.refreshAlbums(this.albumService);
+      this.store.refreshAlbums(this.albumService, undefined, this.albumRefreshOptions());
       this.store.refreshArtists();
     });
   }
@@ -319,7 +454,7 @@ export class LibraryService {
     const removedCount = this.store.transaction(() => {
       const changed = this.store.deleteTracks(missingTrackIds);
       if (changed > 0) {
-        this.store.refreshAlbums(this.albumService);
+        this.store.refreshAlbums(this.albumService, undefined, this.albumRefreshOptions());
         this.store.refreshArtists();
       }
       return changed;
@@ -373,6 +508,10 @@ export class LibraryService {
   close(): void {
     this.closeDatabase();
   }
+
+  private albumRefreshOptions(): { albumMergeStrategy: AlbumMergeStrategy } {
+    return { albumMergeStrategy: this.readAppSettings().albumMergeStrategy };
+  }
 }
 
 export const createLibraryService = (
@@ -400,17 +539,29 @@ export const createLibraryService = (
   const coverExtractor = dependencies.coverExtractor ?? new TsCoverExtractor();
   const coverCacheDir = dependencies.coverCacheDir
     ? resolveCoverCacheDir(databasePath, dependencies.coverCacheDir)
-    : resolveConfiguredCoverCacheDir(databasePath, getAppSettings());
+    : resolveConfiguredCoverCacheDir(databasePath, (dependencies.appSettings ?? getAppSettings)());
   const albumService = new AlbumService();
   const scanJobQueue = new ScanJobQueue(store, fileScanner, metadataReader, coverExtractor, albumService, {
     coverCacheDir,
     metadataConcurrency: dependencies.metadataConcurrency,
     coverConcurrency: dependencies.coverConcurrency,
+    getAlbumMergeStrategy: () => (dependencies.appSettings ?? getAppSettings)().albumMergeStrategy,
   });
 
   const networkMetadataService = new NetworkMetadataService(database);
 
-  return new LibraryService(store, scanJobQueue, albumService, () => database.close(), databasePath, coverCacheDir, coverExtractor, metadataReader, networkMetadataService);
+  return new LibraryService(
+    store,
+    scanJobQueue,
+    albumService,
+    () => database.close(),
+    databasePath,
+    coverCacheDir,
+    coverExtractor,
+    metadataReader,
+    networkMetadataService,
+    dependencies.appSettings ?? getAppSettings,
+  );
 };
 
 let defaultLibraryService: LibraryService | null = null;
@@ -477,6 +628,41 @@ const readCoverImage = (filePath: string): { data: Uint8Array; mimeType: string 
   return {
     data: readFileSync(normalizedPath),
     mimeType: mimeTypeForImagePath(normalizedPath),
+  };
+};
+
+const supportedImageMimeType = (value: string | null | undefined): string | null => {
+  const normalized = value?.split(';')[0]?.trim().toLocaleLowerCase();
+  return normalized === 'image/jpeg' || normalized === 'image/png' || normalized === 'image/webp' ? normalized : null;
+};
+
+const mimeTypeForImageUrl = (url: string): string => {
+  const path = new URL(url).pathname;
+  return mimeTypeForImagePath(path);
+};
+
+const readCoverImageFromUrl = async (url: string, mimeTypeHint: string | null): Promise<{ data: Uint8Array; mimeType: string }> => {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: 'image/avif,image/webp,image/png,image/jpeg,*/*',
+        'User-Agent': 'ECHO-Next/0.1',
+      },
+    });
+  } catch (error) {
+    throw new Error(`封面下载失败，但标签信息仍可应用。${error instanceof Error ? ` ${error.message}` : ''}`);
+  }
+
+  if (!response.ok) {
+    throw new Error('封面下载失败，但标签信息仍可应用。');
+  }
+
+  const contentType = response.headers.get('content-type');
+  const mimeType = supportedImageMimeType(mimeTypeHint) ?? supportedImageMimeType(contentType) ?? mimeTypeForImageUrl(url);
+  return {
+    data: new Uint8Array(await response.arrayBuffer()),
+    mimeType,
   };
 };
 

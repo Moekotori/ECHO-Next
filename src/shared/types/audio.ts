@@ -3,6 +3,25 @@ export type AudioOutputMode = 'shared' | 'exclusive' | 'asio';
 export type AudioPlaybackState = 'idle' | 'loading' | 'playing' | 'paused' | 'stopped' | 'ended' | 'error';
 
 export type PlaybackSpeedMode = 'nightcore' | 'daycore' | 'speed';
+export type ChannelBalanceMonoMode = 'off' | 'sum' | 'left' | 'right';
+
+export type ChannelBalanceState = {
+  enabled: boolean;
+  balance: number;
+  leftGainDb: number;
+  rightGainDb: number;
+  swapLeftRight: boolean;
+  monoMode: ChannelBalanceMonoMode;
+  invertLeft: boolean;
+  invertRight: boolean;
+  constantPower: boolean;
+  clippingRisk?: boolean;
+};
+
+export const channelBalanceMinBalance = -1;
+export const channelBalanceMaxBalance = 1;
+export const channelBalanceMinGainDb = -12;
+export const channelBalanceMaxGainDb = 6;
 
 export type AudioDeviceInfo = {
   id: string;
@@ -52,6 +71,7 @@ export type AudioStatus = {
   bitPerfectCandidate: boolean;
   sampleRateMismatch: boolean;
   eqEnabled: boolean;
+  channelBalanceEnabled: boolean;
   dspActive: boolean;
   preampDb: number;
   eqPresetName: string | null;

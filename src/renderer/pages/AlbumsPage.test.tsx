@@ -252,12 +252,12 @@ describe('AlbumsPage', () => {
     expect(container.querySelector('.album-detail-cover img')?.getAttribute('src')).toBe('echo-cover://album/cover-1');
 
     fireEvent.click(screen.getByRole('listitem'));
-    expect(window.echo.playback.playLocalFile).toHaveBeenCalledWith(
+    await waitFor(() => expect(window.echo.playback.playLocalFile).toHaveBeenCalledWith(
       expect.objectContaining({
         trackId: 'track-1',
         filePath: 'D:\\Music\\track-1.flac',
       }),
-    );
+    ));
 
     fireEvent.click(screen.getByRole('button', { name: 'Albums' }));
     expect((screen.getByPlaceholderText('Search albums / artists') as HTMLInputElement).value).toBe('kept search');

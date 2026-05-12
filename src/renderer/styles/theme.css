@@ -17,6 +17,13 @@ body {
   font-family: var(--echo-font-family);
   font-size: var(--echo-base-font-size);
   line-height: var(--echo-ui-line-height);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body * {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 button {

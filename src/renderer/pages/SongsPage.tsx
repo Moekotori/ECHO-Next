@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Download, FolderPlus, RotateCw, Search, Trash2 } from 'lucide-react';
 import type { EditableTrackTags, LibrarySort, LibraryTrack } from '../../shared/types/library';
 import { TrackContextMenu } from '../components/library/TrackContextMenu';
@@ -52,7 +52,11 @@ export const SongsPage = (): JSX.Element => {
   const requestIdRef = useRef(0);
   const tagEditorCloseTimerRef = useRef<number | null>(null);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
-  const { currentTrackId, playTrack, setQueue, appendToQueue, playTrackNext, removeFromQueue } = usePlaybackQueue();
+  const { currentTrackId, playTrack, appendToQueue, playTrackNext, items: queueItems, removeQueueItem } = usePlaybackQueue();
+  const queueSource = useMemo(
+    () => ({ type: 'songs' as const, label: '歌曲列表', search: search || undefined, sort }),
+    [search, sort],
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -128,10 +132,6 @@ export const SongsPage = (): JSX.Element => {
   useEffect(() => {
     void loadTracks(1, 'replace');
   }, [loadTracks]);
-
-  useEffect(() => {
-    setQueue(tracks);
-  }, [setQueue, tracks]);
 
   useEffect(() => {
     const handleLibraryChanged = (): void => {
@@ -222,17 +222,27 @@ export const SongsPage = (): JSX.Element => {
 
       try {
         setError(null);
-        await playTrack(track);
+        await playTrack(track, {
+          replaceQueueWith: tracks,
+          source: queueSource,
+        });
       } catch (playError) {
         setError(playError instanceof Error ? playError.message : String(playError));
       }
     },
-    [playTrack],
+    [playTrack, queueSource, tracks],
   );
 
   const handleOpenTrackMenu = useCallback((track: LibraryTrack, position: { x: number; y: number }): void => {
     setTrackMenu({ track, position });
   }, []);
+
+  const handleAddTrackToQueue = useCallback(
+    (track: LibraryTrack): void => {
+      appendToQueue(track, queueSource);
+    },
+    [appendToQueue, queueSource],
+  );
 
   const handleTrackMenuAction = useCallback(
     async (action: TrackMenuAction, track: LibraryTrack): Promise<void> => {
@@ -249,13 +259,18 @@ export const SongsPage = (): JSX.Element => {
 
         switch (action) {
           case 'play-next':
-            playTrackNext(track);
+            playTrackNext(track, queueSource);
             return;
           case 'add-to-queue':
-            appendToQueue(track);
+            appendToQueue(track, queueSource);
             return;
           case 'remove-from-queue':
-            removeFromQueue(track.id);
+            {
+              const queuedItem = queueItems.find((item) => item.track.id === track.id);
+              if (queuedItem) {
+                removeQueueItem(queuedItem.queueId);
+              }
+            }
             return;
           case 'edit-tags':
             setTagEditorError(null);
@@ -309,7 +324,7 @@ export const SongsPage = (): JSX.Element => {
         setError(actionError instanceof Error ? actionError.message : String(actionError));
       }
     },
-    [appendToQueue, playTrackNext, removeFromQueue],
+    [appendToQueue, playTrackNext, queueItems, queueSource, removeQueueItem],
   );
 
   const closeTagEditor = useCallback((): void => {
@@ -323,28 +338,37 @@ export const SongsPage = (): JSX.Element => {
     }, 280);
   }, []);
 
-  const handleSaveTags = useCallback(async (track: LibraryTrack, tags: EditableTrackTags, coverPath: string | null): Promise<void> => {
-    const library = window.echo?.library;
+  const handleSaveTags = useCallback(
+    async (
+      track: LibraryTrack,
+      tags: EditableTrackTags,
+      coverPath: string | null,
+      coverUrl: string | null,
+      coverMimeType: string | null,
+    ): Promise<void> => {
+      const library = window.echo?.library;
 
-    if (!library) {
-      setTagEditorError('Desktop bridge unavailable. Open ECHO Next in Electron to edit embedded tags.');
-      return;
-    }
+      if (!library) {
+        setTagEditorError('Desktop bridge unavailable. Open ECHO Next in Electron to edit embedded tags.');
+        return;
+      }
 
-    setIsSavingTags(true);
-    setTagEditorError(null);
+      setIsSavingTags(true);
+      setTagEditorError(null);
 
-    try {
-      const updatedTrack = await library.updateTrackTags({ trackId: track.id, tags, coverPath });
-      setTracks((current) => current.map((item) => (item.id === updatedTrack.id ? updatedTrack : item)));
-      window.dispatchEvent(new Event('library:changed'));
-      closeTagEditor();
-    } catch (saveError) {
-      setTagEditorError(saveError instanceof Error ? saveError.message : String(saveError));
-    } finally {
-      setIsSavingTags(false);
-    }
-  }, [closeTagEditor]);
+      try {
+        const updatedTrack = await library.updateTrackTags({ trackId: track.id, tags, coverPath, coverUrl, coverMimeType });
+        setTracks((current) => current.map((item) => (item.id === updatedTrack.id ? updatedTrack : item)));
+        window.dispatchEvent(new Event('library:changed'));
+        closeTagEditor();
+      } catch (saveError) {
+        setTagEditorError(saveError instanceof Error ? saveError.message : String(saveError));
+      } finally {
+        setIsSavingTags(false);
+      }
+    },
+    [closeTagEditor],
+  );
 
   return (
     <div className="songs-page">
@@ -434,6 +458,7 @@ export const SongsPage = (): JSX.Element => {
         currentTrackId={currentTrackId}
         canLoadMore={hasMore && !isLoading}
         onEndReached={handleLoadMore}
+        onAddToQueue={handleAddTrackToQueue}
         onOpenTrackMenu={handleOpenTrackMenu}
         onPlay={handlePlayTrack}
       />
@@ -459,7 +484,7 @@ export const SongsPage = (): JSX.Element => {
         isSaving={isSavingTags}
         error={tagEditorError}
         onClose={closeTagEditor}
-        onSave={(track, tags, coverPath) => void handleSaveTags(track, tags, coverPath)}
+        onSave={(track, tags, coverPath, coverUrl, coverMimeType) => void handleSaveTags(track, tags, coverPath, coverUrl, coverMimeType)}
       />
     </div>
   );

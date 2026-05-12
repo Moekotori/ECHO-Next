@@ -1,4 +1,4 @@
-import type { AudioDeviceInfo, AudioOutputSettings, AudioStatus } from '../shared/types/audio';
+import type { AudioDeviceInfo, AudioOutputSettings, AudioStatus, ChannelBalanceState } from '../shared/types/audio';
 import type { AppSettings } from '../shared/types/appSettings';
 import type { CoverCacheMigrationResult, SetCoverCacheDirectoryRequest } from '../shared/types/coverCache';
 import type { EqPreset, EqSavePresetRequest, EqSetBandFrequencyRequest, EqSetBandGainRequest, EqState } from '../shared/types/eq';
@@ -19,6 +19,14 @@ import type {
   NetworkApplyResult,
   NetworkCandidateList,
   NetworkRepairResult,
+  NetworkTagCandidate,
+  NetworkTagCandidateSearchRequest,
+  PlaybackHistoryEntry,
+  PlaybackHistoryQuery,
+  PlaybackHistorySummary,
+  StartPlaybackHistoryRequest,
+  StartPlaybackHistoryResult,
+  FinishPlaybackHistoryRequest,
   TrackCoverSelection,
 } from '../shared/types/library';
 import type { PlaybackStartRequest, PlaybackStatus } from '../shared/types/playback';
@@ -54,16 +62,26 @@ export type EchoApi = {
     getTracks: (query?: LibraryPageQuery) => Promise<LibraryPage<LibraryTrack>>;
     getAlbums: (query?: LibraryPageQuery) => Promise<LibraryPage<LibraryAlbum>>;
     getArtists: (query?: LibraryPageQuery) => Promise<LibraryPage<LibraryArtist>>;
+    getArtist: (artistId: string) => Promise<LibraryArtist | null>;
+    getArtistTracks: (artistId: string, query?: LibraryPageQuery) => Promise<LibraryPage<LibraryTrack>>;
+    getArtistAlbums: (artistId: string, query?: LibraryPageQuery) => Promise<LibraryPage<LibraryAlbum>>;
     getAlbumTracks: (
       albumId: string,
       query?: Pick<LibraryPageQuery, 'page' | 'pageSize'>,
     ) => Promise<LibraryPage<LibraryTrack>>;
     getSummary: () => Promise<LibrarySummary>;
+    refreshAlbumGrouping: () => Promise<LibrarySummary>;
     getDiagnostics: () => Promise<LibraryDiagnostics>;
     chooseTrackCover: () => Promise<TrackCoverSelection | null>;
     loadEmbeddedTrackTags: (trackId: string) => Promise<EmbeddedTrackTagsLoadResult>;
     updateTrackTags: (request: LibraryTrackTagUpdateRequest) => Promise<LibraryTrack>;
     recordTrackPlayback: (trackId: string) => Promise<void>;
+    getPlaybackHistory: (query?: PlaybackHistoryQuery) => Promise<LibraryPage<PlaybackHistoryEntry>>;
+    getPlaybackHistorySummary: () => Promise<PlaybackHistorySummary>;
+    deletePlaybackHistoryEntry: (id: string) => Promise<void>;
+    clearPlaybackHistory: () => Promise<void>;
+    startPlaybackHistory: (request: StartPlaybackHistoryRequest) => Promise<StartPlaybackHistoryResult>;
+    finishPlaybackHistory: (request: FinishPlaybackHistoryRequest) => Promise<PlaybackHistoryEntry | null>;
     openTrackInFolder: (trackId: string) => Promise<void>;
     openTrackWithSystem: (trackId: string) => Promise<void>;
     copyTrackPath: (trackId: string) => Promise<void>;
@@ -76,6 +94,10 @@ export type EchoApi = {
     repairMissingMetadata: (trackId: string) => Promise<NetworkRepairResult>;
     scanMissingMetadata: (limit?: number) => Promise<MissingMetadataScanResult>;
     showNetworkCandidates: (trackId: string) => Promise<NetworkCandidateList>;
+    searchNetworkTagCandidates: (
+      trackId: string,
+      options?: Omit<NetworkTagCandidateSearchRequest, 'trackId'>,
+    ) => Promise<NetworkTagCandidate[]>;
     applyNetworkMissingOnly: (candidateId: string) => Promise<NetworkApplyResult>;
     applyNetworkSelected: (candidateId: string) => Promise<NetworkApplyResult>;
     rejectNetworkCandidate: (candidateId: string) => Promise<NetworkApplyResult>;
@@ -105,6 +127,9 @@ export type EchoApi = {
     listPresets: () => Promise<EqPreset[]>;
     savePreset: (request: EqSavePresetRequest) => Promise<EqPreset>;
     deletePreset: (presetId: string) => Promise<EqPreset[]>;
+    getChannelBalanceState: () => Promise<ChannelBalanceState>;
+    setChannelBalanceState: (patch: Partial<ChannelBalanceState>) => Promise<ChannelBalanceState>;
+    resetChannelBalance: () => Promise<ChannelBalanceState>;
   };
 };
 

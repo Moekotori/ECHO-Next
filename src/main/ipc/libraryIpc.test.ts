@@ -90,8 +90,13 @@ const installLibraryService = () => {
     cancelScan: vi.fn(),
     getTracks: vi.fn(),
     getAlbums: vi.fn(),
+    getArtists: vi.fn(),
+    getArtist: vi.fn(),
+    getArtistTracks: vi.fn(),
+    getArtistAlbums: vi.fn(),
     getAlbumTracks: vi.fn(),
     getSummary: vi.fn(),
+    refreshAlbumGrouping: vi.fn(() => ({ songCount: 2, albumCount: 1, artistCount: 2, folderCount: 1, totalDuration: 2, lastScanAt: null })),
     getDiagnostics: vi.fn(),
     updateTrackTags: vi.fn(),
     recordTrackPlayback: vi.fn(),
@@ -160,6 +165,30 @@ describe('library IPC', () => {
     );
     expect(existsSync(outputPath)).toBe(true);
     expect(readFileSync(outputPath).subarray(1, 4).toString()).toBe('PNG');
+  });
+
+  it('refreshes album grouping through IPC', async () => {
+    const service = installLibraryService();
+
+    const result = await handlers[IpcChannels.LibraryRefreshAlbumGrouping]!();
+
+    expect(service.refreshAlbumGrouping).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ albumCount: 1 });
+  });
+
+  it('registers artist detail IPC handlers with normalized queries', async () => {
+    const service = installLibraryService();
+    service.getArtist.mockReturnValue({ id: 'artist-1', name: 'Suara', sortName: 'suara', role: 'both', trackCount: 2, albumCount: 1 });
+    service.getArtistTracks.mockReturnValue({ items: [], page: 1, pageSize: 50, total: 0, hasMore: false });
+    service.getArtistAlbums.mockReturnValue({ items: [], page: 1, pageSize: 12, total: 0, hasMore: false });
+
+    await handlers[IpcChannels.LibraryGetArtist]!(null, 'artist-1');
+    await handlers[IpcChannels.LibraryGetArtistTracks]!(null, 'artist-1', { page: 2, pageSize: 50, sort: 'durationDesc', extra: true });
+    await handlers[IpcChannels.LibraryGetArtistAlbums]!(null, 'artist-1', { page: 1, pageSize: 12, sort: 'recent' });
+
+    expect(service.getArtist).toHaveBeenCalledWith('artist-1');
+    expect(service.getArtistTracks).toHaveBeenCalledWith('artist-1', { page: 2, pageSize: 50, sort: 'durationDesc' });
+    expect(service.getArtistAlbums).toHaveBeenCalledWith('artist-1', { page: 1, pageSize: 12, sort: 'recent' });
   });
 });
 

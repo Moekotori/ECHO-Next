@@ -42,7 +42,7 @@ export class QQMusicProvider implements NetworkMetadataProvider {
       const singers = Array.isArray(song.singer) ? song.singer.map(asRecord) : [];
       const artistName = singers.map((singer) => text(singer.name)).filter(Boolean).join(' / ') || null;
       const interval = number(song.interval);
-      const albumMid = text(album.mid);
+      const albumMid = text(album.mid) ?? text(album.pmid) ?? text(song.albummid);
 
       return {
         provider: this.name,

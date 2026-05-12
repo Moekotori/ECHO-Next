@@ -14,6 +14,7 @@ type TrackRowProps = {
   track: LibraryTrack;
   isPlaying: boolean;
   onPlay?: (track: LibraryTrack) => void;
+  onAddToQueue?: (track: LibraryTrack) => void;
   onOpenMenu?: (track: LibraryTrack, position: { x: number; y: number }) => void;
 };
 
@@ -73,7 +74,7 @@ const tagClassNameByKind: Record<HifiTagKind, string> = {
 };
 
 export const TrackRow = memo(
-  ({ track, isPlaying, onPlay, onOpenMenu }: TrackRowProps): JSX.Element => {
+  ({ track, isPlaying, onPlay, onAddToQueue, onOpenMenu }: TrackRowProps): JSX.Element => {
     const tags = tagsFromTrack(track);
     const [failedCoverUrl, setFailedCoverUrl] = useState<string | null>(null);
     const shouldShowCover = Boolean(track.coverThumb && track.coverThumb !== failedCoverUrl);
@@ -111,6 +112,13 @@ export const TrackRow = memo(
         onOpenMenu?.(track, { x: rect.right - 12, y: rect.bottom + 8 });
       },
       [onOpenMenu, track],
+    );
+    const handleAddToQueue = useCallback(
+      (event: MouseEvent<HTMLButtonElement>): void => {
+        event.stopPropagation();
+        onAddToQueue?.(track);
+      },
+      [onAddToQueue, track],
     );
     const handleCoverError = useCallback((): void => {
       if (!track.coverThumb) {
@@ -150,12 +158,12 @@ export const TrackRow = memo(
           <div className="track-title-row">
             {isPlaying ? <span className="playing-dot" aria-hidden="true" /> : null}
             <strong className="track-title">{track.title}</strong>
-            {isPlaying ? <span className="playing-pill">播放中</span> : null}
+            {isPlaying ? <span className="playing-pill">Playing</span> : null}
           </div>
           <div className="track-subtitle">
             {track.artist} - {track.album}
           </div>
-          <div className="tag-row track-tags" aria-label="音频规格">
+          <div className="tag-row track-tags" aria-label="Audio specifications">
             {tags.map((tag) => (
               <span className={`hifi-tag ${tagClassNameByKind[tag.kind]}`} key={`${track.id}-${tag.label}`}>
                 {tag.label}
@@ -166,14 +174,14 @@ export const TrackRow = memo(
 
         <div className="track-duration">{formatDuration(track.duration)}</div>
 
-        <div className="track-actions" aria-label={`${track.title} 操作`} onClick={stopActionPropagation} onDoubleClick={stopActionPropagation}>
-          <button className="row-action" type="button" aria-label={`喜欢 ${track.title}`} title="喜欢">
+        <div className="track-actions" aria-label={`${track.title} actions`} onClick={stopActionPropagation} onDoubleClick={stopActionPropagation}>
+          <button className="row-action" type="button" aria-label={`Like ${track.title}`} title="Like">
             <Heart size={16} />
           </button>
-          <button className="row-action" type="button" aria-label={`加入队列 ${track.title}`} title="加入队列">
+          <button className="row-action" type="button" aria-label={`Add to queue ${track.title}`} title="Add to queue" onClick={handleAddToQueue}>
             <ListPlus size={16} />
           </button>
-          <button className="row-action" type="button" aria-label={`更多 ${track.title}`} title="更多" onClick={handleMoreClick}>
+          <button className="row-action" type="button" aria-label={`More ${track.title}`} title="More" onClick={handleMoreClick}>
             <MoreHorizontal size={16} />
           </button>
         </div>
@@ -184,6 +192,7 @@ export const TrackRow = memo(
     previous.track === next.track &&
     previous.isPlaying === next.isPlaying &&
     previous.onPlay === next.onPlay &&
+    previous.onAddToQueue === next.onAddToQueue &&
     previous.onOpenMenu === next.onOpenMenu,
 );
 

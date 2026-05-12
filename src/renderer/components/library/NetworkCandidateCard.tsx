@@ -4,6 +4,10 @@ import { useI18n } from '../../i18n/I18nProvider';
 
 type Props = {
   candidate: NetworkMetadataCandidate;
+  feedback?: {
+    tone: 'success' | 'info' | 'warning';
+    text: string;
+  };
   track: LibraryTrack;
   onApplyMissingOnly: (candidateId: string) => void;
   onApplySelected: (candidateId: string) => void;
@@ -37,7 +41,7 @@ const valueText = (value: unknown): string => {
   return String(value);
 };
 
-export const NetworkCandidateCard = ({ candidate, track, onApplyMissingOnly, onApplySelected, onReject }: Props): JSX.Element => {
+export const NetworkCandidateCard = ({ candidate, feedback, track, onApplyMissingOnly, onApplySelected, onReject }: Props): JSX.Element => {
   const { t } = useI18n();
   const visibleFields = fieldPairs.filter(([key]) => candidate[key] !== null || track[key] !== null);
   const candidateCoverUrl = candidate.coverUrl;
@@ -96,6 +100,11 @@ export const NetworkCandidateCard = ({ candidate, track, onApplyMissingOnly, onA
           {t('settings.library.networkPanel.reject')}
         </button>
       </footer>
+      {feedback ? (
+        <p className="network-candidate-feedback" data-tone={feedback.tone} role="status">
+          {feedback.text}
+        </p>
+      ) : null}
     </article>
   );
 };

@@ -54,9 +54,16 @@ export const AppLayout = ({ routes }: AppLayoutProps): JSX.Element => {
     const handleNavigateImportFolder = (): void => {
       setActiveRouteId('import-folder');
     };
+    const handleNavigateQueue = (): void => {
+      setActiveRouteId('queue');
+    };
 
     window.addEventListener('app:navigate:import-folder', handleNavigateImportFolder);
-    return () => window.removeEventListener('app:navigate:import-folder', handleNavigateImportFolder);
+    window.addEventListener('app:navigate:queue', handleNavigateQueue);
+    return () => {
+      window.removeEventListener('app:navigate:import-folder', handleNavigateImportFolder);
+      window.removeEventListener('app:navigate:queue', handleNavigateQueue);
+    };
   }, []);
 
   useEffect(() => {

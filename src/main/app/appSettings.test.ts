@@ -20,6 +20,7 @@ describe('app settings normalization', () => {
     });
 
     expect(settings.coverCacheDir).toBeNull();
+    expect(settings.albumMergeStrategy).toBe('standard');
     expect(settings.hideToTrayOnClose).toBe(true);
     expect(settings.networkMetadataProviders).toEqual(['qq-music']);
   });
@@ -34,5 +35,48 @@ describe('app settings normalization', () => {
     const { normalizeSettings } = await import('./appSettings');
 
     expect(normalizeSettings({ coverCacheDir: 'relative-cover-cache' }).coverCacheDir).toBe(resolve('relative-cover-cache'));
+  });
+
+  it('normalizes albumMergeStrategy values', async () => {
+    const { normalizeSettings } = await import('./appSettings');
+
+    expect(normalizeSettings({}).albumMergeStrategy).toBe('standard');
+    expect(normalizeSettings({ albumMergeStrategy: 'sameTitleAndCover' }).albumMergeStrategy).toBe('sameTitleAndCover');
+    expect(normalizeSettings({ albumMergeStrategy: 'loose' as never }).albumMergeStrategy).toBe('standard');
+  });
+
+  it('normalizes channel balance settings for old and malformed settings files', async () => {
+    const { normalizeSettings } = await import('./appSettings');
+
+    expect(normalizeSettings({}).channelBalance).toMatchObject({
+      enabled: false,
+      balance: 0,
+      leftGainDb: 0,
+      rightGainDb: 0,
+      monoMode: 'off',
+      constantPower: true,
+    });
+
+    expect(
+      normalizeSettings({
+        channelBalance: {
+          enabled: true,
+          balance: -5,
+          leftGainDb: -99,
+          rightGainDb: 99,
+          monoMode: 'right',
+          invertLeft: true,
+          constantPower: false,
+        },
+      }).channelBalance,
+    ).toMatchObject({
+      enabled: true,
+      balance: -1,
+      leftGainDb: -12,
+      rightGainDb: 6,
+      monoMode: 'right',
+      invertLeft: true,
+      constantPower: false,
+    });
   });
 });
