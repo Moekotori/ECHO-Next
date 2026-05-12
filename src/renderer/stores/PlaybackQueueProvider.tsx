@@ -5,6 +5,7 @@ import type { PlaybackStatus } from '../../shared/types/playback';
 
 type PlaybackQueueContextValue = {
   tracks: LibraryTrack[];
+  currentTrack: LibraryTrack | null;
   currentTrackId: string | null;
   isShuffleEnabled: boolean;
   canGoPrevious: boolean;
@@ -41,12 +42,18 @@ const pickRandomTrack = (tracks: LibraryTrack[], currentTrackId: string | null):
 export const PlaybackQueueProvider = ({ children }: PropsWithChildren): JSX.Element => {
   const [tracks, setTracks] = useState<LibraryTrack[]>([]);
   const [currentTrackId, setCurrentTrackId] = useState<string | null>(null);
+  const [lastPlayedTrack, setLastPlayedTrack] = useState<LibraryTrack | null>(null);
   const [isShuffleEnabled, setIsShuffleEnabled] = useState(false);
 
   const currentIndex = useMemo(
     () => (currentTrackId ? tracks.findIndex((track) => track.id === currentTrackId) : -1),
     [currentTrackId, tracks],
   );
+  const currentTrack = useMemo(() => {
+    const queuedTrack = currentTrackId ? tracks.find((track) => track.id === currentTrackId) : null;
+
+    return queuedTrack ?? (lastPlayedTrack?.id === currentTrackId ? lastPlayedTrack : null);
+  }, [currentTrackId, lastPlayedTrack, tracks]);
 
   const setQueue = useCallback((nextTracks: LibraryTrack[]): void => {
     // Phase 1.2 queue scope: this is the visible/loaded SongsPage window, not the full-library playback queue.
@@ -66,6 +73,7 @@ export const PlaybackQueueProvider = ({ children }: PropsWithChildren): JSX.Elem
       trackId: track.id,
       probe: createProbeFromTrack(track),
     });
+    setLastPlayedTrack(track);
     setCurrentTrackId(status.currentTrackId ?? track.id);
     return status;
   }, []);
@@ -95,6 +103,7 @@ export const PlaybackQueueProvider = ({ children }: PropsWithChildren): JSX.Elem
   const value = useMemo<PlaybackQueueContextValue>(
     () => ({
       tracks,
+      currentTrack,
       currentTrackId,
       isShuffleEnabled,
       canGoPrevious: tracks.length > 0,
@@ -106,7 +115,7 @@ export const PlaybackQueueProvider = ({ children }: PropsWithChildren): JSX.Elem
       playPrevious,
       playNext,
     }),
-    [currentTrackId, isShuffleEnabled, playNext, playPrevious, playTrack, setQueue, tracks],
+    [currentTrack, currentTrackId, isShuffleEnabled, playNext, playPrevious, playTrack, setQueue, tracks],
   );
 
   return <PlaybackQueueContext.Provider value={value}>{children}</PlaybackQueueContext.Provider>;

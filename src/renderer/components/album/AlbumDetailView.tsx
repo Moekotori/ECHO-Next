@@ -69,16 +69,21 @@ export const AlbumDetailView = ({ album, onBack }: AlbumDetailViewProps): JSX.El
     setIsLoadingFirstTrack(isLoading);
   }, []);
 
+  const withAlbumCoverFallback = useCallback(
+    (track: LibraryTrack): LibraryTrack => (track.coverThumb || !album.coverThumb ? track : { ...track, coverThumb: album.coverThumb }),
+    [album.coverThumb],
+  );
+
   const handlePlayTrack = useCallback(
     async (track: LibraryTrack): Promise<void> => {
       try {
         setPlayError(null);
-        await playTrack(track);
+        await playTrack(withAlbumCoverFallback(track));
       } catch (error) {
         setPlayError(error instanceof Error ? error.message : String(error));
       }
     },
-    [playTrack],
+    [playTrack, withAlbumCoverFallback],
   );
 
   const handlePlayNow = useCallback((): void => {

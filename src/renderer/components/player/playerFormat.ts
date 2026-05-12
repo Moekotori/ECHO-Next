@@ -26,3 +26,5 @@ export const basename = (filePath: string | null): string => {
 
   return filePath.split(/[\\/]/).pop() || filePath;
 };
+
+export const titleFromPath = (filePath: string | null): string => basename(filePath).replace(/\.(aac|aiff?|alac|ape|dff|dsf|flac|m4a|mp3|ogg|opus|wav|wv)$/i, '');

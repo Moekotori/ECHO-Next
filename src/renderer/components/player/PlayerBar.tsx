@@ -7,7 +7,7 @@ import { PlayerProgress } from './PlayerProgress';
 import { PlayerStatusChips } from './PlayerStatusChips';
 import { PlayerTransport } from './PlayerTransport';
 import { PlayerVolumeControl } from './PlayerVolumeControl';
-import { basename } from './playerFormat';
+import { titleFromPath } from './playerFormat';
 
 type PlayerBarProps = {
   onOpenAudioSettings?: () => void;
@@ -45,7 +45,10 @@ export const PlayerBar = ({ onOpenAudioSettings }: PlayerBarProps): JSX.Element 
 
       setPlaybackStatus(nextPlaybackStatus);
       setAudioStatus(nextAudioStatus);
-      setQueueCurrentTrackId(nextPlaybackStatus.currentTrackId ?? nextAudioStatus.currentTrackId);
+      const nextTrackId = nextPlaybackStatus.currentTrackId ?? nextAudioStatus.currentTrackId ?? null;
+      if (nextTrackId) {
+        setQueueCurrentTrackId(nextTrackId);
+      }
       setError(nextAudioStatus.error);
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
@@ -67,12 +70,12 @@ export const PlayerBar = ({ onOpenAudioSettings }: PlayerBarProps): JSX.Element 
   const isPlaying = state === 'playing';
   const statusTrackId = playbackStatus?.currentTrackId ?? audioStatus?.currentTrackId ?? null;
   const trackId = queue.currentTrackId ?? statusTrackId;
-  const currentTrack = queue.tracks.find((track) => track.id === trackId) ?? null;
+  const currentTrack = queue.currentTrack ?? queue.tracks.find((track) => track.id === trackId) ?? null;
   const filePath = currentTrack?.path ?? audioStatus?.currentFilePath ?? playbackStatus?.filePath ?? null;
   const positionSeconds = audioStatus?.positionSeconds ?? (playbackStatus?.positionMs ?? 0) / 1000;
   const durationSeconds = audioStatus?.durationSeconds ?? (playbackStatus?.durationMs ?? 0) / 1000;
   const displayedPositionSeconds = seekPreviewSeconds ?? positionSeconds;
-  const title = currentTrack?.title ?? basename(filePath);
+  const title = currentTrack?.title ?? titleFromPath(filePath);
   const artist = currentTrack?.artist || currentTrack?.albumArtist || (filePath ? 'Local file' : 'Ready');
 
   const runPlaybackAction = useCallback(

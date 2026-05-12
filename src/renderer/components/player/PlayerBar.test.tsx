@@ -89,12 +89,105 @@ const QueueSeed = ({ tracks }: { tracks: LibraryTrack[] }): JSX.Element => {
   return <PlayerBar />;
 };
 
+const ExternalPlaySeed = ({ track }: { track: LibraryTrack }): JSX.Element => {
+  const { playTrack } = usePlaybackQueue();
+
+  useEffect(() => {
+    void playTrack(track);
+  }, [playTrack, track]);
+
+  return <PlayerBar />;
+};
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
 
 describe('PlayerBar', () => {
+  it('shows cover art for a track started outside the SongsPage loaded queue', async () => {
+    const albumTrack = makeTrack(7, {
+      title: 'Album Detail Track',
+      artist: 'Album Detail Artist',
+      coverThumb: 'echo-cover://album/cover-7',
+    });
+
+    window.echo = {
+      playback: {
+        getStatus: vi.fn().mockResolvedValue({
+          state: 'playing',
+          currentTrackId: null,
+          positionMs: 0,
+          durationMs: albumTrack.duration * 1000,
+          filePath: albumTrack.path,
+        }),
+        playLocalFile: vi.fn().mockResolvedValue({
+          state: 'playing',
+          currentTrackId: albumTrack.id,
+          positionMs: 0,
+          durationMs: albumTrack.duration * 1000,
+          filePath: albumTrack.path,
+        }),
+        play: vi.fn(),
+        pause: vi.fn(),
+        stop: vi.fn(),
+        seek: vi.fn(),
+        openLocalAudioFile: vi.fn(),
+      },
+      audio: {
+        getStatus: vi.fn().mockResolvedValue({
+          ...audioStatus(albumTrack),
+          currentTrackId: null,
+        }),
+        listDevices: vi.fn(),
+        setOutput: vi.fn(),
+      },
+      eq: {
+        getState: vi.fn().mockResolvedValue(eqState()),
+        setEnabled: vi.fn().mockResolvedValue(eqState()),
+        setBandGain: vi.fn().mockResolvedValue(eqState()),
+        setPreamp: vi.fn().mockResolvedValue(eqState()),
+        setPreset: vi.fn().mockResolvedValue(eqState()),
+        reset: vi.fn().mockResolvedValue(eqState()),
+        listPresets: vi.fn().mockResolvedValue([]),
+        savePreset: vi.fn(),
+        deletePreset: vi.fn().mockResolvedValue([]),
+      },
+      library: {
+        getTracks: vi.fn(),
+        getAlbums: vi.fn(),
+        getAlbumTracks: vi.fn(),
+        getSummary: vi.fn(),
+        chooseFolder: vi.fn(),
+        addFolder: vi.fn(),
+        getFolders: vi.fn(),
+        removeFolder: vi.fn(),
+        scanFolder: vi.fn(),
+        getScanStatus: vi.fn(),
+        cancelScan: vi.fn(),
+        getDiagnostics: vi.fn(),
+      },
+      app: {
+        getVersion: vi.fn(),
+        minimize: vi.fn(),
+        toggleMaximize: vi.fn(),
+        close: vi.fn(),
+      },
+    } as unknown as Window['echo'];
+
+    const { container } = render(
+      <PlaybackQueueProvider>
+        <ExternalPlaySeed track={albumTrack} />
+      </PlaybackQueueProvider>,
+    );
+
+    await screen.findByText('Album Detail Track');
+    expect(screen.getByText('Album Detail Artist')).toBeTruthy();
+    expect(container.querySelector('.player-cover img')?.getAttribute('src')).toBe('echo-cover://album/cover-7');
+    expect(screen.queryByText(/\.flac$/i)).toBeNull();
+    expect(screen.queryByText('Local file')).toBeNull();
+  });
+
   it('keeps the newly queued next track visible when audio status still reports the previous track', async () => {
     const firstTrack = makeTrack(1);
     const secondTrack = makeTrack(2);
