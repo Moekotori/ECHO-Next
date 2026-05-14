@@ -6,7 +6,9 @@ import { spawnSync, spawn } from 'node:child_process';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = resolve(dirname(scriptPath), '..');
-const hostPath = join(projectRoot, 'electron-app', 'build', process.platform === 'win32' ? 'echo-audio-host.exe' : 'echo-audio-host');
+const isWindows = process.platform === 'win32';
+const isLinux = process.platform === 'linux';
+const hostPath = join(projectRoot, 'electron-app', 'build', isWindows ? 'echo-audio-host.exe' : 'echo-audio-host');
 
 const fail = (message) => {
   console.error(`[smoke:audio-host] ${message}`);
@@ -104,7 +106,8 @@ const runPcmHost = async (args, { timeoutMs = 15000, sampleRate = 48000, seconds
 };
 
 const assertNoSharedFallback = (label, result) => {
-  if (result.stdout.includes('"backend":"wasapi-shared"') || result.stdout.includes('"exclusive":false,"backend":"wasapi-shared"')) {
+  const sharedBackend = isWindows ? 'wasapi-shared' : 'alsa';
+  if (result.stdout.includes(`"backend":"${sharedBackend}"`) || result.stdout.includes(`"exclusive":false,"backend":"${sharedBackend}"`)) {
     fail(`${label} fell back to shared output; stderr=${result.stderr}; stdout=${result.stdout}`);
   }
 };
@@ -174,29 +177,36 @@ if (asioListResult.status === 0) {
   console.log(`[smoke:audio-host] ASIO list diagnostic OK: ${diagnostic.trim()}`);
 }
 
-const exclusiveResult = await runPcmHost(['-sr', '44100', '-ch', '2', '-exclusive'], {
-  timeoutMs: 60000,
-  sampleRate: 44100,
-  seconds: 0.1,
-});
-const exclusiveReady = exclusiveResult.events.find((event) => event.ready === true);
-assertNoSharedFallback('exclusive smoke', exclusiveResult);
+if (!isLinux) {
+  const exclusiveResult = await runPcmHost(['-sr', '44100', '-ch', '2', '-exclusive'], {
+    timeoutMs: 60000,
+    sampleRate: 44100,
+    seconds: 0.1,
+  });
+  const exclusiveReady = exclusiveResult.events.find((event) => event.ready === true);
+  assertNoSharedFallback('exclusive smoke', exclusiveResult);
 
-if (exclusiveResult.exitCode === 0) {
-  if (!exclusiveReady || exclusiveReady.exclusive !== true || exclusiveReady.backend !== 'wasapi-exclusive') {
-    fail(`exclusive ready metadata invalid; stderr=${exclusiveResult.stderr}; stdout=${exclusiveResult.stdout}`);
+  if (exclusiveResult.exitCode === 0) {
+    const expectedBackend = isWindows ? 'wasapi-exclusive' : 'alsa-exclusive';
+    if (!exclusiveReady || exclusiveReady.exclusive !== true || exclusiveReady.backend !== expectedBackend) {
+      fail(`exclusive ready metadata invalid; stderr=${exclusiveResult.stderr}; stdout=${exclusiveResult.stdout}`);
+    }
+    if (!hasReadyBufferTelemetry(exclusiveReady)) {
+      fail(`exclusive ready buffer telemetry invalid; stderr=${exclusiveResult.stderr}; stdout=${exclusiveResult.stdout}`);
+    }
+    if (!hasAdvancedPosition(exclusiveResult.events)) {
+      fail(`exclusive did not consume PCM frames; stderr=${exclusiveResult.stderr}; stdout=${exclusiveResult.stdout}`);
+    }
+    console.log(`[smoke:audio-host] exclusive ready OK (${exclusiveReady.deviceType ?? 'unknown device type'})`);
+  } else if (isWindows && !/WASAPI exclusive open failed/i.test(exclusiveResult.stderr)) {
+    fail(`exclusive failed without explicit diagnostic; exit=${exclusiveResult.exitCode}; stderr=${exclusiveResult.stderr}; stdout=${exclusiveResult.stdout}`);
+  } else if (isLinux && !/ALSA exclusive open failed/i.test(exclusiveResult.stderr)) {
+    fail(`exclusive failed without explicit diagnostic; exit=${exclusiveResult.exitCode}; stderr=${exclusiveResult.stderr}; stdout=${exclusiveResult.stdout}`);
+  } else {
+    console.log('[smoke:audio-host] exclusive failure diagnostic OK');
   }
-  if (!hasReadyBufferTelemetry(exclusiveReady)) {
-    fail(`exclusive ready buffer telemetry invalid; stderr=${exclusiveResult.stderr}; stdout=${exclusiveResult.stdout}`);
-  }
-  if (!hasAdvancedPosition(exclusiveResult.events)) {
-    fail(`exclusive did not consume PCM frames; stderr=${exclusiveResult.stderr}; stdout=${exclusiveResult.stdout}`);
-  }
-  console.log(`[smoke:audio-host] exclusive ready OK (${exclusiveReady.deviceType ?? 'unknown device type'})`);
-} else if (!/WASAPI exclusive open failed/i.test(exclusiveResult.stderr)) {
-  fail(`exclusive failed without explicit diagnostic; exit=${exclusiveResult.exitCode}; stderr=${exclusiveResult.stderr}; stdout=${exclusiveResult.stdout}`);
 } else {
-  console.log('[smoke:audio-host] exclusive failure diagnostic OK');
+  console.log('[smoke:audio-host] Linux detected; skipping exclusive-mode smoke (ALSA exclusive not supported yet).');
 }
 
 if (asioListResult.status === 0 && asioDevices.length > 0) {

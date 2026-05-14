@@ -27,6 +27,7 @@ ipcRenderer.on(IpcChannels.PlaybackLocalAudioFilesOpened, (_event: Electron.IpcR
 
 const echoApi: EchoApi = {
   app: {
+    getPlatform: () => ipcRenderer.invoke(IpcChannels.AppGetPlatform),
     getVersion: () => ipcRenderer.invoke(IpcChannels.AppGetVersion),
     minimize: () => ipcRenderer.invoke(IpcChannels.AppWindowMinimize),
     toggleMaximize: () => ipcRenderer.invoke(IpcChannels.AppWindowToggleMaximize),

@@ -1,4 +1,5 @@
 export const IpcChannels = {
+  AppGetPlatform: 'app:get-platform',
   AppGetVersion: 'app:get-version',
   AppWindowMinimize: 'app:window-minimize',
   AppWindowToggleMaximize: 'app:window-toggle-maximize',

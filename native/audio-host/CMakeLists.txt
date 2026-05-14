@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(echo_audio_host VERSION 0.1.0 LANGUAGES CXX)
+# CMake 4.x requires explicit C language when JUCE FetchContent enables it
+# internally. Without this, Generate step fails with CMAKE_C_COMPILE_OBJECT.
+project(echo_audio_host VERSION 0.1.0 LANGUAGES C CXX)
 
 include(FetchContent)
 

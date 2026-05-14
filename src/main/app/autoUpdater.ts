@@ -1,7 +1,9 @@
 import { app, dialog } from 'electron';
-import { autoUpdater } from 'electron-updater';
+import electronUpdater from 'electron-updater';
 import type { UpdateInfo } from 'electron-updater';
 import type { UpdateStatus } from '../../shared/types/updates';
+
+const { autoUpdater } = electronUpdater;
 
 type ReleaseNoteInfo = {
   version?: string;
