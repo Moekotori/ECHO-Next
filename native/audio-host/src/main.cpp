@@ -253,11 +253,13 @@ bool isPreferredSharedType(const juce::String& typeName)
 {
     return ! isExclusiveType(typeName)
         && (typeName.containsIgnoreCase("windows audio")
-            || typeName.containsIgnoreCase("wasapi"));
+            || typeName.containsIgnoreCase("wasapi")
+            || typeName.containsIgnoreCase("alsa"));
 }
 
 int sharedTypePriority(const juce::String& typeName)
 {
+#if JUCE_WINDOWS
     if (typeName.containsIgnoreCase("shared"))
         return 0;
 
@@ -268,6 +270,20 @@ int sharedTypePriority(const juce::String& typeName)
         return 2;
 
     return 3;
+#elif JUCE_LINUX
+    if (typeName.containsIgnoreCase("alsa"))
+        return 0;
+
+    if (typeName.containsIgnoreCase("jack"))
+        return 1;
+
+    if (typeName.containsIgnoreCase("pulseaudio") || typeName.containsIgnoreCase("pulse"))
+        return 2;
+
+    return 3;
+#else
+    return 0;
+#endif
 }
 
 bool shouldIncludeType(const juce::String& typeName, DeviceListMode mode)
@@ -303,10 +319,25 @@ std::string getBackendName(const Options& options, const juce::String& typeName)
     if (options.asio || isAsioType(typeName))
         return "asio";
 
+#if JUCE_WINDOWS
     if (options.exclusive || isExclusiveType(typeName))
         return "wasapi-exclusive";
 
     return "wasapi-shared";
+#elif JUCE_LINUX
+    if (options.exclusive || isExclusiveType(typeName))
+        return "alsa-exclusive";
+
+    if (typeName.containsIgnoreCase("jack"))
+        return "jack";
+
+    if (typeName.containsIgnoreCase("pulseaudio") || typeName.containsIgnoreCase("pulse"))
+        return "pulseaudio";
+
+    return "alsa";
+#else
+    return "coreaudio";
+#endif
 }
 
 std::string getOpenFailurePrefix(const Options& options)
@@ -314,10 +345,16 @@ std::string getOpenFailurePrefix(const Options& options)
     if (options.asio)
         return "ASIO open failed: ";
 
+#if JUCE_WINDOWS
     if (options.exclusive)
         return "WASAPI exclusive open failed: ";
 
     return "output open failed: ";
+#elif JUCE_LINUX
+    return "ALSA open failed: ";
+#else
+    return "output open failed: ";
+#endif
 }
 
 int getDeviceBufferSize(const Options& options)
@@ -1383,7 +1420,13 @@ int runHost(const Options& options)
         throw std::runtime_error("ASIO open failed: ASIO support is disabled at build time (ECHO_ENABLE_ASIO=OFF)");
 
     if (options.exclusive)
+#if JUCE_WINDOWS
         logLine("WASAPI exclusive requested; shared fallback is disabled");
+#elif JUCE_LINUX
+        logLine("Exclusive mode requested; shared fallback is disabled");
+#else
+        logLine("Exclusive mode requested; shared fallback is disabled");
+#endif
 
     if (options.asio)
         logLine("ASIO requested; shared fallback is disabled");

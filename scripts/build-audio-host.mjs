@@ -164,12 +164,35 @@ const findBuiltHost = () => {
   const exe = process.platform === 'win32' ? 'echo-audio-host.exe' : 'echo-audio-host';
   const candidates = [
     join(buildDir, 'echo-audio-host_artefacts', config, exe),
+    join(buildDir, 'echo-audio-host_artefacts', exe),
     join(buildDir, config, exe),
     join(buildDir, exe),
   ];
 
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 };
+
+const isWindows = process.platform === 'win32';
+const isLinux = process.platform === 'linux';
+
+let cmakeGenerator;
+let cmakeArchArgs;
+
+if (isWindows) {
+  cmakeGenerator = 'Visual Studio 17 2022';
+  cmakeArchArgs = ['-A', 'x64'];
+} else if (isLinux) {
+  const ninjaCheck = spawnSync('ninja', ['--version'], { stdio: 'ignore' });
+  if (ninjaCheck.status === 0 && !ninjaCheck.error) {
+    cmakeGenerator = 'Ninja';
+  } else {
+    cmakeGenerator = 'Unix Makefiles';
+  }
+  cmakeArchArgs = [];
+} else {
+  cmakeGenerator = 'Unix Makefiles';
+  cmakeArchArgs = [];
+}
 
 try {
   run('cmake', [
@@ -178,10 +201,9 @@ try {
     '-B',
     buildDir,
     '-G',
-    'Visual Studio 17 2022',
-    '-A',
-    'x64',
-    `-DECHO_ENABLE_ASIO=${enableAsio}`,
+    cmakeGenerator,
+    ...cmakeArchArgs,
+    '-DECHO_ENABLE_ASIO=' + enableAsio,
   ]);
   patchJuceWasapiExclusiveProbe();
   stripJuceExamplePngProfiles();
@@ -204,7 +226,12 @@ try {
   }
 } catch (error) {
   console.error('[build:audio-host] Failed to build JUCE audio host.');
-  console.error('[build:audio-host] Requirements: CMake, Visual Studio 2022 Build Tools, Windows SDK, and network access for JUCE 8.0.12.');
+  const platformReqs = isWindows
+    ? 'Visual Studio 2022 Build Tools, Windows SDK'
+    : isLinux
+      ? 'build-essential, libasound2-dev, libjack-dev, and ninja-build (optional)'
+      : 'Xcode Command Line Tools';
+  console.error('[build:audio-host] Requirements: CMake, ' + platformReqs + ', and network access for JUCE 8.0.12.');
   console.error(`[build:audio-host] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 }
