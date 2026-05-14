@@ -411,6 +411,15 @@ export const AudioSettingsDrawer = ({
   const [hiddenDeviceKeys, setHiddenDeviceKeys] = useState<string[]>(() => readHiddenDeviceKeys());
   const [hiddenDeviceMenu, setHiddenDeviceMenu] = useState<HiddenDeviceMenu>(null);
   const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
+  const [platform, setPlatform] = useState<string>('');
+
+  useEffect(() => {
+    if (isOpen) {
+      window.echo?.app.getPlatform().then(setPlatform).catch(() => setPlatform(''));
+    }
+  }, [isOpen]);
+
+  const isWindows = platform === 'win32';
 
   const hiddenDeviceKeySet = useMemo(() => new Set(hiddenDeviceKeys), [hiddenDeviceKeys]);
   const visibleDevices = useMemo(
@@ -844,6 +853,7 @@ export const AudioSettingsDrawer = ({
           })}
         </section>
 
+        {isWindows ? (
         <section className="audio-drawer-section">
           <div className="audio-drawer-section-title">
             <Zap size={17} />
@@ -877,6 +887,7 @@ export const AudioSettingsDrawer = ({
             );
           })}
         </section>
+        ) : null}
 
         <section className="audio-drawer-section audio-drawer-options audio-drawer-options--open">
           <div className="audio-drawer-section-title">
@@ -884,6 +895,8 @@ export const AudioSettingsDrawer = ({
             <h3>{t('audioDrawer.section.advancedOutput')}</h3>
           </div>
 
+          {isWindows ? (
+          <>
           <label className="audio-toggle-row">
             <span>
               <Lock size={17} />
@@ -896,6 +909,8 @@ export const AudioSettingsDrawer = ({
             />
           </label>
           <p>{t('audioDrawer.option.wasapiExclusiveDescription')}</p>
+          </>
+          ) : null}
 
           <div className="audio-drawer-mini-grid" aria-label="Latency profile">
             {latencyProfileOptions.map((option) => (

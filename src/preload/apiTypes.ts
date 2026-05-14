@@ -97,6 +97,7 @@ export type FontFileAsset = {
 
 export type EchoApi = {
   app: {
+    getPlatform: () => Promise<NodeJS.Platform>;
     getVersion: () => Promise<string>;
     minimize: () => Promise<void>;
     toggleMaximize: () => Promise<void>;

@@ -35,6 +35,8 @@
 #include <mmdeviceapi.h>
 #include <propsys.h>
 #include <wrl/client.h>
+#elif JUCE_LINUX
+#include <cstdio>
 #endif
 
 #ifndef ECHO_ENABLE_ASIO
@@ -365,7 +367,12 @@ int getDeviceBufferSize(const Options& options)
     if (options.exclusive || options.asio)
         return 2048;
 
+#if JUCE_LINUX
+    // ALSA/PipeWire shared mode needs a larger buffer to avoid underruns.
+    return 2048;
+#else
     return 512;
+#endif
 }
 
 std::vector<int> buildBufferSizeAttempts(const Options& options)
@@ -1194,6 +1201,8 @@ void stdinReader(PcmRingAudioSource& source, int channels)
 {
 #if JUCE_WINDOWS
     _setmode(_fileno(stdin), _O_BINARY);
+#elif JUCE_LINUX
+    std::setvbuf(stdin, nullptr, _IONBF, 0);
 #endif
 
     constexpr size_t chunkBytes = 16 * 1024;

@@ -119,6 +119,7 @@ const normalizeCoverCacheRequest = (value: unknown): SetCoverCacheDirectoryReque
 };
 
 export const registerIpc = (): void => {
+  ipcMain.handle(IpcChannels.AppGetPlatform, () => process.platform);
   ipcMain.handle(IpcChannels.AppGetVersion, () => `v${app.getVersion()}`);
   ipcMain.handle(IpcChannels.AppWindowMinimize, (event: IpcMainInvokeEvent): void => {
     BrowserWindow.fromWebContents(event.sender)?.minimize();
